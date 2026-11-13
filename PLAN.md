@@ -1,0 +1,169 @@
+# PLAN.md — Pengembangan fork inventor-mcp
+
+Rencana kerja untuk memodifikasi inventor-mcp (asal: NeonGlay/inventor-mcp) agar:
+
+1. berjalan andal di **Autodesk Inventor 2027**,
+2. bisa membuat **technical drawing** (prioritas utama),
+3. bisa membuat dan menganalisis **assembly**,
+4. bisa membuat **exploded view**.
+
+Pemilik proyek: Rizal. Semua pekerjaan dijalankan oleh sesi Claude Code di folder `C:\\inventor-mcp`.
+
+\---
+
+## Cara memakai file ini
+
+* Baca **Aturan kerja** dan **Log progres** sebelum mulai.
+* Kerjakan **satu fase per perintah**. Jangan lanjut ke fase berikutnya tanpa persetujuan Rizal.
+* Di akhir fase: centang tugas yang selesai, isi Log progres, commit, push, lalu **berhenti** dan tulis laporan fase (format di bawah).
+* Kalau Rizal bilang "lanjut", kerjakan fase berikutnya yang belum selesai.
+
+## Aturan kerja
+
+1. **Alur per fitur:** coba di `execute\_python` → kalau berhasil, pindahkan ke `src/inventor\_api.py` → `reload\_api` → daftarkan tool di `src/server.py` → tambahkan kasus ke `tests/smoke.py` → jalankan → lulus → commit.
+2. **Verifikasi API dulu, jangan menebak.** Nama method dan nilai enum di rencana ini adalah petunjuk dari pengetahuan umum tentang Inventor API, belum diverifikasi di 2027. Sebelum memakainya, cek lewat probe type library (lihat `docs/inventor-api-notes.md`, bagian gencache) di proses terpisah, lalu hapus cache `gen\_py` sesudahnya.
+3. **Satuan:** semua parameter tool dalam mm dan derajat. Konversi ke cm dan radian dilakukan di dalam `inventor\_api.py`.
+4. **Transaksi:** operasi multi-langkah dibungkus `TransactionManager` supaya bisa di-rollback.
+5. **Lokasi file uji:** semua file Inventor hasil uji disimpan di `C:\\inventor-test\\`, tidak pernah di dalam repo. Jangan menghapus atau menimpa file di luar `C:\\inventor-test\\` dan `C:\\inventor-mcp\\`.
+6. **Jangan memodifikasi** `skills/` asli NeonGlay kecuali di Fase 6. Jangan menyentuh `.mcp.json`.
+7. **Kalau gagal 3 kali** dengan pendekatan yang sama pada satu masalah, berhenti dan laporkan. Jangan memaksa.
+8. **Catat setiap temuan API** (method yang berubah, enum yang berbeda, quirk) di `docs/inventor-2027-notes.md`. Ini sama pentingnya dengan kodenya.
+9. Commit kecil dan sering, pesan commit dalam bahasa Inggris, format `fase N: ringkasan`.
+
+## Keputusan default
+
+Dipakai kecuali Rizal mengubahnya:
+
+|Hal|Default|
+|-|-|
+|Standar gambar|ISO, proyeksi sudut pertama (first angle)|
+|Kertas|A3 landscape|
+|Satuan|mm|
+|Template drawing|Template ISO bawaan Inventor. Path-nya disimpan di satu konstanta `DRAWING\_TEMPLATE` supaya bisa diganti template tim nanti|
+|Title block|Diisi dari iProperties dokumen (Part Number, Description, Designer, Material)|
+
+## Format laporan akhir fase
+
+```
+FASE N — SELESAI / SEBAGIAN / GAGAL
+Tool baru: ...
+Hasil smoke.py: X PASS, Y FAIL
+Temuan API 2027: ...
+Yang perlu Rizal cek manual di Inventor: ...
+Masalah terbuka: ...
+```
+
+\---
+
+## Fase 0 — Fondasi
+
+Tujuan: repo siap dikembangkan dan punya jaring pengaman.
+
+* \[x] Simpan kode `execute\_python` assembly kopling flens dari tes sebelumnya ke `experiments/assembly\_coupling.py`, dengan komentar per langkah termasuk error yang muncul dan solusinya. *(Hanya bisa kalau riwayat tes masih ada di sesi ini. Kalau tidak ada, tulis catatan di Log progres dan lewati.)*
+* \[x] Ubah remote: `origin` (NeonGlay) → ganti nama jadi `upstream`; tambahkan `origin` = `https://github.com/rizaaaell/inventor-mcp.git`. Tunjukkan `git remote -v`.
+* \[x] Tambahkan `.mcp.json` dan `.claude/` ke `.gitignore`.
+* \[x] `pyproject.toml`: dependency menjadi `mcp\[cli]>=1.0.0,<2`.
+* \[x] Buat `tests/smoke.py`: membangun silinder Ø50×10 (volume ≈ 19 635 mm³) dan flens kopling (disk Ø120×20, hub Ø60×30, bore Ø30, 4 lubang Ø11 di PCD 90), memeriksa volume dengan toleransi 0,1%, mencetak PASS/FAIL per kasus.
+* \[x] Commit dan push ke `origin main`.
+
+Selesai jika: smoke.py PASS semua, commit terlihat di GitHub fork, `.mcp.json` tidak ter-commit.
+
+## Fase 1 — Audit Inventor 2027
+
+Tujuan: tahu persis apa yang rusak sebelum membangun di atasnya.
+
+* \[ ] Jalankan **setiap** tool yang sudah ada minimal sekali pada part uji (termasuk hole tapped, counterbore, fillet, chamfer, circular pattern, revolve, sheet metal face/flange/cut, set/add parameter, export STEP).
+* \[ ] Verifikasi semua konstanta enum di bagian atas `inventor\_api.py` terhadap type library 2027.
+* \[ ] Perbaiki yang rusak. Setiap perbaikan dicatat di `docs/inventor-2027-notes.md` (apa yang berubah dari 2026).
+* \[ ] Tambahkan kasus smoke.py untuk fitur yang belum tercakup: chamfer, fillet, tapped hole, circular pattern, sheet metal flange + flat pattern.
+
+Selesai jika: semua tool lama jalan di 2027 atau tercatat sebagai rusak beserta alasannya.
+
+## Fase 2 — Drawing part
+
+Tujuan: dari satu part `.ipt`, menghasilkan drawing `.idw` + PDF yang layak dirapikan manusia.
+
+Tool yang dibuat:
+
+|Tool|Fungsi|Petunjuk API (verifikasi dulu)|
+|-|-|-|
+|`create\_drawing(template, sheet\_size)`|Drawing baru|`Documents.Add(kDrawingDocumentObject, template)`; enum dokumen drawing kemungkinan 12292|
+|`add\_base\_view(model\_path, x, y, scale, orientation, style)`|View utama|`Sheet.DrawingViews.AddBaseView(...)`|
+|`add\_projected\_view(parent, x, y)`|Proyeksi ortografis|`AddProjectedView(...)`|
+|`add\_section\_view(parent, x1, y1, x2, y2, label, x, y)`|Potongan|Butuh sketch garis potong di parent view, lalu `AddSectionView(...)`|
+|`add\_detail\_view(parent, cx, cy, radius, scale, label, x, y)`|Perbesaran|`AddDetailView(...)`|
+|`retrieve\_dimensions(view)`|Ambil dimensi model|`GeneralDimensions.GetRetrievableDimensions(view)` lalu `Retrieve`|
+|`add\_centerlines(view)`|Garis sumbu otomatis|`DrawingView.SetAutomatedCenterlineSettings`|
+|`add\_dimension(view, ...)`|Dimensi manual linear/diameter/radius|Lewat `DrawingCurve` dan `CreateGeometryIntent`|
+|`set\_title\_block(fields)`|Isi title block|iProperties `Design Tracking Properties` dan `Summary Information`|
+|`list\_views()`|Daftar view: nama, posisi, skala, ukuran bounding box||
+|`export\_sheet\_png(path, width)`|Gambar sheet untuk diperiksa visual|`ActiveView.SaveAsBitmap` atau padanannya|
+|`export\_pdf(path)`|Hasil akhir|Translator PDF bawaan Inventor|
+
+Aturan khusus fase ini:
+
+* Setelah setiap perubahan tata letak, panggil `export\_sheet\_png`, **buka gambarnya dengan Read**, dan periksa sendiri: view keluar kertas, dimensi bertumpuk, teks terpotong, view saling tumpang tindih.
+* `add\_base\_view` dan kawan-kawan harus menolak posisi yang membuat view keluar batas sheet.
+
+Uji penerimaan: buat drawing flens kopling A3 dengan front view, top view, section A-A melalui dua lubang baut, retrieve dimensions, centerlines, title block terisi, ekspor PDF.
+
+Selesai jika: PDF terbuka, semua view di dalam kertas, tidak ada view yang tumpang tindih, dan Rizal mengonfirmasi tampilannya.
+
+## Fase 3 — Assembly
+
+Tujuan: assembly dibangun lewat tool, bukan kode mentah.
+
+|Tool|Fungsi|Petunjuk API (verifikasi dulu)|
+|-|-|-|
+|`create\_assembly(template)`|Assembly baru|enum dokumen assembly kemungkinan 12291|
+|`place\_component(path, x, y, z, grounded)`|Menaruh komponen|`Occurrences.Add(path, matrix)`|
+|`list\_occurrences()`|Daftar komponen + status grounded||
+|`add\_constraint(type, occ1, geom1, occ2, geom2, offset)`|mate, flush, insert, angle, tangent|`Constraints.AddMateConstraint` dst.|
+|`find\_occurrence\_face/edge/axis(occ, x, y, z)`|Cari geometri komponen berdasarkan koordinat|Pakai proxy geometri (`CreateGeometryProxy`)|
+|`get\_dof(occ)`|Derajat kebebasan tersisa||
+|`get\_bom(view)`|BOM structured / parts only|`ComponentDefinition.BOM`|
+|`analyze\_interference()`|Interferensi antar komponen + volume|`AnalyzeInterference`|
+|`pattern\_component(occ, ...)`|Pola komponen (mis. baut ×4)||
+
+* \[ ] Ambil logika dari `experiments/assembly\_coupling.py` sebagai dasar.
+* \[ ] Simpan urutan constraint yang dibuat ke file log di samping `.iam` (untuk draf diagram alur perakitan nanti).
+
+Uji penerimaan: bangun ulang kopling flens hanya dengan tool fase ini, tanpa `execute\_python`. BOM benar (2 flens, 2 poros, 4 baut, 4 mur, 8 ring), DOF semua komponen 0, interferensi hanya baut-mur di lubang tap (artefak pemodelan ulir, harus dilaporkan sebagai artefak).
+
+## Fase 4 — Drawing assembly
+
+* \[ ] `add\_parts\_list(view, x, y)` — `Sheet.PartsLists.Add`.
+* \[ ] `add\_balloons(view)` — balloon otomatis per komponen, posisi tidak bertumpuk.
+* \[ ] `add\_base\_view` mendukung assembly dan representasi (view rep).
+
+Uji penerimaan: drawing assembly kopling A3 dengan front view, section melalui sumbu, parts list, balloon untuk setiap komponen, PDF.
+
+## Fase 5 — Exploded view
+
+* \[ ] **Probe dulu:** apakah API Presentation (`.ipn`) di 2027 bisa membuat dokumen presentasi, menambah storyboard/snapshot, dan membuat tweak komponen? Catat hasilnya di `docs/inventor-2027-notes.md`.
+* \[ ] Kalau bisa: tool `create\_presentation`, `add\_tweak(occ, direction, distance)`, `auto\_explode(axis, spacing)`, dan `add\_base\_view` dari `.ipn`.
+* \[ ] Kalau tidak bisa: tool `create\_exploded\_copy(assembly, axis, spacing)` yang menyalin assembly dan menggeser komponen dengan transformasi (tanpa constraint), lalu view drawing diambil dari salinan itu. Jelaskan keterbatasannya di laporan.
+
+Uji penerimaan: drawing exploded view kopling flens dengan balloon dan parts list.
+
+## Fase 6 — Skill
+
+* \[ ] `skills/inventor-drawing/SKILL.md`: kapan memakai tiap tool drawing, aturan pemilihan view (view paling informatif sebagai front, jumlah view minimum), strategi dimensi (retrieve dulu, manual hanya untuk yang kurang), kapan section/detail, standar ISO first angle, loop verifikasi lewat `export\_sheet\_png`, jebakan API yang ditemukan di Fase 2 dan 4.
+* \[ ] `skills/inventor-assembly/SKILL.md`: urutan constraint yang andal, grounded component pertama, mencari geometri lewat koordinat, membaca hasil interferensi (termasuk artefak ulir), jebakan dari Fase 3 dan 5.
+* \[ ] Perbarui `skills/inventor-modeling/SKILL.md` untuk perbedaan 2027 dari `docs/inventor-2027-notes.md`.
+* \[ ] Perbarui `README.md`: daftar tool lengkap, versi yang diuji (2027.x), cara install termasuk catatan `mcp<2`.
+
+Selesai jika: sesi Claude Code **baru** yang hanya membaca skill bisa membuat drawing part dan assembly sederhana tanpa membaca PLAN.md.
+
+\---
+
+## Log progres
+
+Diisi oleh sesi Claude Code setiap akhir fase. Entri terbaru di bawah.
+
+|Tanggal|Fase|Status|Catatan|
+|-|-|-|-|
+|2026-11-13|0|Selesai|smoke.py 2/2 PASS (silinder 19 635,0 mm³; flens 267 697,2 mm³). Commit a096a41 di origin/main; `.mcp.json` dan `.claude/` diabaikan git. Run pertama smoke.py menggantung: tidak ada Inventor yang berjalan, `connect()` menyalakan instance baru yang tidak merespons. Lulus setelah Inventor dibuka manual.|
+
+
+
