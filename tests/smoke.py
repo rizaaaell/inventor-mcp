@@ -60,41 +60,60 @@ def build_flange(inv):
     )
 
 
-CASES = [
-    ("cylinder_d50x10", build_cylinder),
-    ("coupling_flange", build_flange),
-]
+def volume_case(build):
+    def case(inv):
+        inv.create_part(name="smoke_volume")
+        doc = inv.active_document()
+        try:
+            expected = build(inv)
+            actual = doc.ComponentDefinition.MassProperties.Volume * 1000  # cm3 to mm3
+        finally:
+            doc.Close(True)
+        error = abs(actual - expected) / expected
+        detail = f"volume {actual:.1f} mm3, expected {expected:.1f} mm3, error {error:.4%}"
+        assert error <= TOLERANCE, detail
+        return detail
+
+    return case
 
 
-def run_case(inv, name, build):
-    inv.create_part(name=f"smoke_{name}")
-    doc = inv.active_document()
+def pinned_document_case(inv):
+    """Tools must keep acting on the part from create_part after another tab is activated."""
+    inv.create_part(name="smoke_pin_first")
+    first = inv.active_document()
+    inv.create_part(name="smoke_pin_second")
+    second = inv.active_document()
     try:
-        expected = build(inv)
-        actual = doc.ComponentDefinition.MassProperties.Volume * 1000  # cm3 to mm3
+        first.Activate()  # what a click on the other document tab does
+        target = inv.active_document()
+        assert target.InternalName == second.InternalName, (
+            f"tools followed the tab switch to {target.DisplayName}"
+        )
+        return f"target stayed {target.DisplayName} after switching tabs"
     finally:
-        doc.Close(True)
-    error = abs(actual - expected) / expected
-    ok = error <= TOLERANCE
-    print(
-        f"{'PASS' if ok else 'FAIL'}  {name}: "
-        f"volume {actual:.1f} mm3, expected {expected:.1f} mm3, error {error:.4%}"
-    )
-    return ok
+        second.Close(True)
+        first.Close(True)
+
+
+CASES = [
+    ("cylinder_d50x10", volume_case(build_cylinder)),
+    ("coupling_flange", volume_case(build_flange)),
+    ("pinned_document", pinned_document_case),
+]
 
 
 def main():
     inv = InventorConnection()
     print(inv.connect())
-    results = []
-    for name, build in CASES:
+    passed = 0
+    for name, case in CASES:
         try:
-            results.append(run_case(inv, name, build))
+            print(f"PASS  {name}: {case(inv)}")
+            passed += 1
         except Exception as exc:
             print(f"FAIL  {name}: {type(exc).__name__}: {exc}")
-            results.append(False)
-    print(f"{sum(results)}/{len(results)} passed")
-    return 0 if all(results) else 1
+    print(f"{passed}/{len(CASES)} passed")
+    return 0 if passed == len(CASES) else 1
 
 
 if __name__ == "__main__":

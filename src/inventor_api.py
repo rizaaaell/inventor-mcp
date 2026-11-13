@@ -30,6 +30,8 @@ kAlignedDim    = 19203
 class InventorConnection:
     def __init__(self):
         self._app = None
+        self._pinned = None
+        self._pinned_known: set[str] = set()
 
     @property
     def app(self):
@@ -143,10 +145,37 @@ class InventorConnection:
                 doc.DisplayName = name
             except Exception:
                 pass  # DisplayName may be read-only before first save
+        self.pin_document(doc)
         return f"Part created: {doc.DisplayName}"
 
+    def pin_document(self, doc) -> None:
+        """Make doc the target of every tool until a newer document replaces it."""
+        self._pinned = doc
+        self._pinned_known = {d.InternalName for d in self.app.Documents}
+
+    def release_document(self) -> None:
+        """Drop the pin so tools follow Inventor's active document again."""
+        self._pinned = None
+        self._pinned_known = set()
+
     def active_document(self):
+        """Document the tools act on: the pinned one, even if another tab was clicked.
+        A document opened after the pin takes over once it becomes active."""
         doc = self.app.ActiveDocument
+        pinned = self._pinned
+        if pinned is not None:
+            try:
+                pinned_id = pinned.InternalName
+            except Exception:
+                # A closed document raises on any property access.
+                self.release_document()
+                pinned = None
+        if pinned is not None and (doc is None or doc.InternalName != pinned_id):
+            if doc is not None and doc.InternalName not in self._pinned_known:
+                self.release_document()
+            else:
+                pinned.Activate()
+                doc = pinned
         if doc is None:
             raise RuntimeError("No active document open in Inventor.")
         return doc
@@ -805,7 +834,7 @@ class InventorConnection:
             if getattr(self, "_txn", None) is not None:
                 return "Transaction already open — commit or abort it first"
             self._txn = self.app.TransactionManager.StartTransaction(
-                self.app.ActiveDocument, name)
+                self.active_document(), name)
             return f"Transaction '{name}' started"
         if action == "commit":
             if getattr(self, "_txn", None) is None:
