@@ -618,7 +618,8 @@ def create_drawing(profile: str = "default", template: str = "", sheet_size: str
 @mcp.tool()
 def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
                   orientation: str = "front", style: str = "visible",
-                  design_view: str = "", positional: str = "") -> str:
+                  design_view: str = "", positional: str = "",
+                  spin: float = 0, spin_axis: str = "Z") -> str:
     """Place the first view of a part or assembly file, centered at (x, y) on the sheet.
     A view that would leave the border or overlap the title block or another view is
     removed again and an error says why.
@@ -632,8 +633,12 @@ def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
         style: visible (hidden lines removed), hidden (hidden lines shown), shaded, shaded_hidden.
         design_view: assembly design view representation to show, e.g. "Default".
         positional: assembly positional representation to show.
+        spin: degrees to turn the view camera about the model axis spin_axis (X, Y or Z).
+              An iso view of a flange with holes at 0/90/180/270 degrees shows pairs of
+              bolts on one line; spin 30 about the flange axis separates them.
     """
-    return inv.add_base_view(model_path, x, y, scale, orientation, style, design_view, positional)
+    return inv.add_base_view(model_path, x, y, scale, orientation, style, design_view, positional,
+                             spin, spin_axis)
 
 
 @mcp.tool()
@@ -1049,6 +1054,43 @@ def add_balloons(view: str, gap: float = 12) -> str:
         gap: distance from the view box to the balloon row, mm.
     """
     return inv.add_balloons(view, gap)
+
+
+@mcp.tool()
+def create_exploded_copy(assembly: str, path: str) -> str:
+    """Copy an assembly with its constraints and patterns removed, for an exploded view.
+
+    Inventor 2027's presentation API cannot add tweaks or snapshot views, so exploded
+    drawings come from this copy: move components with explode_components, save, then
+    place a drawing view of the copy. The copy uses the same part files and the original
+    assembly is not changed. The copy becomes the active document.
+
+    Args:
+        assembly: .iam to copy.
+        path: new .iam path, e.g. "C:/inventor-test/coupling/Kopling_exploded.iam".
+    """
+    return inv.create_exploded_copy(assembly, path)
+
+
+@mcp.tool()
+def explode_components(occurrences: str, dx: float = 0, dy: float = 0, dz: float = 0) -> str:
+    """Move components of the active exploded copy by (dx, dy, dz) mm, assembly coordinates.
+
+    Move outward from the part that stays (usually the grounded one), in assembly order:
+    e.g. a nut further than its washer. Each move is logged in <copy>.explode.json for
+    add_explode_trails. Run save_document afterwards.
+
+    Args:
+        occurrences: comma-separated component names, e.g. "Flens:2, Poros:2".
+    """
+    return inv.explode_components(occurrences, dx, dy, dz)
+
+
+@mcp.tool()
+def add_explode_trails(view: str) -> str:
+    """Thin chain trail lines in a drawing view of an exploded copy, from each moved
+    component back to its assembled position; trails on one line are merged."""
+    return inv.add_explode_trails(view)
 
 
 def main():

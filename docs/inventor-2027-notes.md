@@ -338,6 +338,32 @@ Verified while building the phase 3 tools (2027.1):
 - Curve segments of a component seen edge-on can be neither lines nor arcs (chamfer
   ellipses); they have no `StartPoint` under late binding.
 
+## Presentations and exploded views
+
+- `Documents.Add(12293, template)` creates an `.ipn` (template "Standard (mm).ipn"). Its
+  one scene is empty; `ipn.InsertModel(ipn.Scenes.Item(1), path)` loads an assembly, and
+  `scene.TopSceneComponent.SubComponents` then lists the components.
+- Tweaks cannot be added. `PresentationTweaks` and `PresentationScenes` have only
+  Count/Item; `PresentationExplodedView` (one exists per document) has no tweak methods.
+  The newer path, `ipn.Publications(Context)` / `ActivePublication(Context)` to reach
+  `Storyboard.Tweaks.CreateTweakDefinition` + `Add`, rejects every Context tried (None,
+  "", 0, 1, a NameValueMap, the scene, its name, its top component, the document) with
+  E_INVALIDARG. `PresentationSnapshotViews` has no Add either, so a drawing cannot be
+  pointed at an exploded state of an `.ipn` built by the API.
+- Exploded views therefore come from a copy of the assembly: `doc.SaveAs(path, True)`
+  writes the copy (same part files), then in the copy each pattern element after the
+  first is set `Independent = True`, the pattern deleted (the components stay), all
+  constraints deleted, and components moved by setting `occ.Transformation`.
+- `DrawingView.ModelToSheetSpace(Point)` maps assembly points (cm) onto the sheet; used
+  for the trail lines. Sketch lines in a view take `LineType` (37644 chain) and
+  `LineWeight` (cm).
+- In the four standard iso orientations the bolt lines of a flange with holes at
+  0/90/180/270 degrees overlap in pairs. `TransientObjects.CreateCamera()` with Eye,
+  Target and UpVector turned about the flange axis, passed as `ArbitraryCamera` with
+  orientation `kArbitraryViewOrientation` 10763, separates them. The camera of a standard
+  orientation is read from a throwaway view (`view.Camera`), which takes the next view
+  name, so the new view is renamed after it.
+
 ## Closing documents
 
 - `Document.Close` on a part an open assembly or drawing still uses shows an

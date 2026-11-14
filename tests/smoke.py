@@ -240,7 +240,11 @@ def assembly_case(inv):
             assert not problems, problems
         finally:
             drawing.Close(True)
-        return f"3 components, DOF 0, BOM {bom}, parts list and 2 balloons"
+        inv.create_exploded_copy(str(iam), str(out / "smoke_exploded.iam"))
+        inv.explode_components("smoke_pin:1", dz=40)
+        z = next(o for o in inv.list_occurrences() if o["name"] == "smoke_pin:1")["origin_mm"][2]
+        assert abs(z - 50) < 0.01, f"exploded pin at z={z}, expected 50"
+        return f"3 components, DOF 0, BOM {bom}, parts list and 2 balloons, exploded copy"
     finally:
         assembly.Close(True)
         inv.close_documents_in(str(out))

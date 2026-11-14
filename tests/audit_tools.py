@@ -834,6 +834,25 @@ def assembly():
         srv.inv.active_document().Close(True)
         return f"{parts} | {balloons}"
     check("assembly drawing: design view, no_hatch, parts list, balloons", assembly_drawing)
+
+    def exploded():
+        copy = OUT / "audit_exploded.iam"
+        out = srv.create_exploded_copy(str(OUT / "audit_assembly.iam"), str(copy))
+        ad = srv.inv.active_assembly().ComponentDefinition
+        assert ad.Constraints.Count == 0 and ad.OccurrencePatterns.Count == 0, out
+        before = next(o for o in json.loads(srv.list_occurrences()) if o["name"] == "audit_pin:1")
+        srv.explode_components("audit_pin:1, audit_pin:3", dz=40)
+        after = next(o for o in json.loads(srv.list_occurrences()) if o["name"] == "audit_pin:1")
+        assert abs(after["origin_mm"][2] - before["origin_mm"][2] - 40) < 0.01, (before, after)
+        srv.save_document("")
+        srv.create_drawing()
+        view = srv.add_base_view(str(copy), 150, 180, 0.5, "iso_top_right", spin=30)
+        assert view.startswith("Base view VIEW1"), view
+        trails = srv.add_explode_trails("VIEW1")
+        assert trails.startswith("2 trail"), trails
+        srv.inv.active_document().Close(True)
+        return f"{out} | {trails}"
+    check("create_exploded_copy + explode_components + spin view + trails", exploded)
     close_audit_files()
 
 

@@ -1595,7 +1595,10 @@ class InventorConnection:
 
     def add_base_view(self, model_path: str, x: float, y: float, scale: float = 1.0,
                       orientation: str = "front", style: str = "visible",
-                      design_view: str = "", positional: str = "") -> str:
+                      design_view: str = "", positional: str = "",
+                      spin: float = 0, spin_axis: str = "Z") -> str:
+        """spin turns the camera of the orientation by that many degrees about the model's
+        spin_axis, e.g. so the bolts of a flange stop hiding each other in an iso view."""
         sheet = self.active_drawing().ActiveSheet
         orient = self._VIEW_ORIENTATIONS.get(orientation.lower())
         if orient is None:
@@ -1616,14 +1619,49 @@ class InventorConnection:
                     raise ValueError(f"No {key} {name!r} in {model.DisplayName}: {names}")
                 options.Add(key, name)
         first = sheet.DrawingViews.Count == 0
+        camera, name = self._spun_camera(sheet, model, orient, spin, spin_axis) if spin else (None, "")
         view = sheet.DrawingViews.AddBaseView(
-            model, self._sheet_point(x, y), scale, orient, self._style(style), "", None, options)
+            model, self._sheet_point(x, y), scale, 10763 if camera else orient, self._style(style),
+            "", camera, options)
+        if name:
+            view.Name = name  # the throwaway view took the next name
         rect = self._place_check(sheet, view)
         note = ""
         if first:
             filled = self._apply_title_defaults(self.active_drawing())
             note = f"; title block defaults filled: {', '.join(filled)}" if filled else ""
         return f"Base view {view.Name}: {orientation}, scale {scale:g}, {self._fmt_rect(rect)}{note}"
+
+    def _spun_camera(self, sheet, model, orient: int, spin: float, axis: str):
+        """Camera of a standard orientation turned about a model axis through its target."""
+        import math
+        k = {"X": (1, 0, 0), "Y": (0, 1, 0), "Z": (0, 0, 1)}.get(axis.upper())
+        if k is None:
+            raise ValueError("spin_axis must be X, Y or Z")
+        # A throwaway view is the only way to read the camera of a standard orientation.
+        probe = sheet.DrawingViews.AddBaseView(model, self._sheet_point(0, 0), 0.01, orient, 32257)
+        name = probe.Name
+        try:
+            c = probe.Camera
+            eye, target, up = c.Eye, c.Target, c.UpVector
+            eye, target, up = (eye.X, eye.Y, eye.Z), (target.X, target.Y, target.Z), (up.X, up.Y, up.Z)
+        finally:
+            probe.Delete()
+        a = math.radians(spin)
+
+        def turn(v):  # Rodrigues rotation about k
+            cross = (k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0])
+            dot = sum(p * q for p, q in zip(k, v))
+            return tuple(v[i] * math.cos(a) + cross[i] * math.sin(a) + k[i] * dot * (1 - math.cos(a))
+                         for i in range(3))
+
+        tg = self._tg()
+        d = turn(tuple(e - t for e, t in zip(eye, target)))
+        camera = self.app.TransientObjects.CreateCamera()
+        camera.Target = tg.CreatePoint(*target)
+        camera.Eye = tg.CreatePoint(*(t + v for t, v in zip(target, d)))
+        camera.UpVector = tg.CreateUnitVector(*turn(up))
+        return camera, name
 
     def _apply_title_defaults(self, doc) -> list[str]:
         """Fill the profile's title_block_defaults into fields that are still empty."""
@@ -3077,3 +3115,122 @@ class InventorConnection:
                 item = balloon.BalloonValueSets.Item(1).ItemNumber
                 placed.append((int(item) if str(item).isdigit() else 0, f"{item} {occ.Name} at ({bx:.0f}, {y:.0f})"))
         return f"{len(placed)} balloons on {view}: " + "; ".join(p for _, p in sorted(placed))
+
+    # ---------- Exploded assemblies ----------
+    # The presentation API cannot add tweaks or snapshot views in 2027, so an exploded
+    # view is drawn from a copy of the assembly whose components are moved freely.
+
+    def create_exploded_copy(self, assembly: str, path: str) -> str:
+        """Copy an assembly to path with constraints and patterns removed, ready to explode.
+        The copy uses the same part files; the original assembly is left untouched."""
+        src = os.path.abspath(assembly)
+        path = os.path.abspath(path)
+        if os.path.normcase(src) == os.path.normcase(path):
+            raise ValueError("path must differ from the assembly")
+        for i in range(1, self.app.Documents.Count + 1):
+            if os.path.normcase(self.app.Documents.Item(i).FullFileName) == os.path.normcase(path):
+                raise RuntimeError(f"{path} is open in Inventor. Close it first.")
+        doc = self._open_model(src)
+        doc.SaveAs(path, True)  # save a copy; doc stays the original
+        copy = self.app.Documents.Open(path, True)
+        ad = copy.ComponentDefinition
+        patterns = ad.OccurrencePatterns
+        while patterns.Count:
+            p = patterns.Item(patterns.Count)
+            elements = p.OccurrencePatternElements
+            for j in range(2, elements.Count + 1):  # element 1 holds the original components
+                elements.Item(j).Independent = True
+            p.Delete()
+        constraints = ad.Constraints
+        for i in range(constraints.Count, 0, -1):
+            constraints.Item(i).Delete()
+        copy.Update()
+        copy.Save()
+        self.pin_document(copy)
+        log = os.path.splitext(path)[0] + ".explode.json"
+        with open(log, "w", encoding="utf-8") as f:
+            json.dump({"source": os.path.basename(src), "moves": []}, f, indent=1)
+        return (f"Exploded copy {os.path.basename(path)}: {ad.Occurrences.Count} free components, "
+                "constraints and patterns removed")
+
+    @staticmethod
+    def _center(occ):
+        r = occ.RangeBox
+        return [round((getattr(r.MinPoint, a) + getattr(r.MaxPoint, a)) / 2 * 10, 3) for a in "XYZ"]
+
+    def explode_components(self, occurrences: str, dx: float = 0, dy: float = 0, dz: float = 0) -> str:
+        """Move components of an exploded copy by (dx, dy, dz) mm in assembly coordinates."""
+        doc = self.active_assembly()
+        log_path = os.path.splitext(doc.FullFileName)[0] + ".explode.json"
+        if not doc.FullFileName or not os.path.exists(log_path):
+            raise RuntimeError("Active assembly is not an exploded copy; use create_exploded_copy first")
+        if doc.ComponentDefinition.Constraints.Count:
+            raise RuntimeError("The assembly still has constraints, which would pull components back")
+        tg = self._tg()
+        names = re.findall(r"\s*(.+?:\d+)\s*(?:,|$)", occurrences)
+        if not names:
+            raise ValueError("occurrences: comma-separated component names such as 'Flens:2, Poros:2'")
+        with open(log_path, encoding="utf-8") as f:
+            log = json.load(f)
+        moved = []
+        for name in names:
+            occ = self._occurrence(name)
+            before = self._center(occ)
+            m = occ.Transformation
+            t = m.Translation
+            m.SetTranslation(tg.CreateVector(t.X + dx / 10, t.Y + dy / 10, t.Z + dz / 10))
+            occ.Transformation = m
+            log["moves"].append({"component": occ.Name, "from_mm": before, "to_mm": self._center(occ),
+                                 "move_mm": [dx, dy, dz]})
+            moved.append(occ.Name)
+        doc.Update()
+        with open(log_path, "w", encoding="utf-8") as f:
+            json.dump(log, f, indent=1, ensure_ascii=False)
+        return f"Moved {len(moved)} by ({dx:g}, {dy:g}, {dz:g}) mm: {', '.join(moved)}"
+
+    def add_explode_trails(self, view: str) -> str:
+        """Thin chain lines from each exploded component back to where it was assembled,
+        merged per straight path, drawn in a sketch of the view."""
+        v = self._view(view)
+        model = v.ReferencedDocumentDescriptor.ReferencedDocument
+        log_path = os.path.splitext(model.FullFileName)[0] + ".explode.json"
+        if not os.path.exists(log_path):
+            raise ValueError(f"View {view} does not show an exploded copy")
+        with open(log_path, encoding="utf-8") as f:
+            moves = json.load(f)["moves"]
+        # A component moved twice keeps its first start and its last end.
+        paths = {}
+        for m in moves:
+            start = paths.get(m["component"], (m["from_mm"],))[0]
+            paths[m["component"]] = (start, m["to_mm"])
+        tg = self._tg()
+        segments = []
+        for start, end in paths.values():
+            a = v.ModelToSheetSpace(tg.CreatePoint(*(c / 10 for c in start)))
+            b = v.ModelToSheetSpace(tg.CreatePoint(*(c / 10 for c in end)))
+            if ((a.X - b.X) ** 2 + (a.Y - b.Y) ** 2) ** 0.5 > 0.05:
+                segments.append(((a.X, a.Y), (b.X, b.Y)))
+        # Collinear overlapping segments (one bolt line) become one line.
+        merged = []
+        for a, b in segments:
+            for k, (c, d) in enumerate(merged):
+                ux, uy = d[0] - c[0], d[1] - c[1]
+                n = (ux * ux + uy * uy) ** 0.5
+                off = lambda p: abs((p[0] - c[0]) * uy - (p[1] - c[1]) * ux) / n
+                if off(a) < 0.02 and off(b) < 0.02:
+                    pts = sorted([a, b, c, d], key=lambda p: (p[0] - c[0]) * ux + (p[1] - c[1]) * uy)
+                    merged[k] = (pts[0], pts[-1])
+                    break
+            else:
+                merged.append((a, b))
+        sketch = v.Sketches.Add()
+        sketch.Edit()
+        try:
+            for a, b in merged:
+                line = sketch.SketchLines.AddByTwoPoints(
+                    sketch.SheetToSketchSpace(tg.CreatePoint2d(*a)), sketch.SheetToSketchSpace(tg.CreatePoint2d(*b)))
+                line.LineType = 37644  # kChainLineType
+                line.LineWeight = 0.025
+        finally:
+            sketch.ExitEdit()
+        return f"{len(merged)} trail line(s) on {view} for {len(paths)} moved component(s)"
