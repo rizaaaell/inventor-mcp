@@ -1,12 +1,14 @@
 """Phase 3 acceptance: the flange coupling rebuilt only through the MCP assembly tools.
 
 Run from the repo root:  python -X utf8 -u experiments/assembly_coupling_tools.py
-Needs the five part files in C:\\inventor-test\\coupling\\ and writes
+Needs Flens.ipt and Poros.ipt in C:\\inventor-test\\coupling\\ and writes
 Kopling_Flens_tools.iam plus Kopling_Flens_tools.constraints.json next to them.
-Same constraint scheme as assembly_coupling.py, with geometry picked by selectors.
+Fasteners come from Content Center (DIN 933, DIN 934, DIN 125-1 A). One bolt set is
+constrained at the hole on +X, then patterned four times about the flange axis.
 """
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -17,20 +19,32 @@ import src.server as srv  # noqa: E402
 PART_DIR = Path(r"C:\inventor-test\coupling")
 OUT = PART_DIR / "Kopling_Flens_tools.iam"
 FLANGE, SHAFT = PART_DIR / "Flens.ipt", PART_DIR / "Poros.ipt"
-BOLT, NUT, WASHER = (PART_DIR / f for f in
-                     ("Baut_DIN933_M10x60.ipt", "Mur_DIN934_M10.ipt", "Ring_DIN125_M10.ipt"))
+BOLT = ("Fasteners/Bolts/Hex Head", "DIN 933", "M10 x 60")
+NUT = ("Fasteners/Nuts/Hex", "DIN 934", "M10")
+WASHER = ("Fasteners/Washers/Plain", "DIN 125-1 A", "A 10.5")
+files = {}
+
+
+def placed(out):
+    print(out)
+    name = re.match(r"Placed (.+?)( \(grounded\))?: origin", out).group(1)
+    if "| file " in out:
+        files[Path(out.split("| file ")[1]).name] = name
+    return name
 
 
 def place(path, x=0, y=0, z=0, flip=False, grounded=False):
-    out = srv.place_component(str(path), x, y, z, rx=180 if flip else 0, grounded=grounded)
-    print(out)
-    return out.split()[1].rstrip(":")  # "Placed Flens:1 (grounded): ..."
+    return placed(srv.place_component(str(path), x, y, z, rx=180 if flip else 0, grounded=grounded))
+
+
+def place_cc(part, x, y, z):
+    return placed(srv.place_content_center(*part, x=x, y=y, z=z))
 
 
 def constrain(*args, **kwargs):
     out = srv.add_constraint(*args, **kwargs)
     print("  ", out)
-    if "healthy" not in out.split("(")[1]:
+    if "(healthy)" not in out:
         raise RuntimeError(out)
 
 
@@ -53,37 +67,43 @@ try:
         constrain("insert", flange, "circle:0,0,50,15", shaft, "circle:0,0,0,15", offset=-40)
         constrain("flush", flange, "plane:XZ", shaft, "plane:XZ")
 
-    # Flange B is flipped about X, so its hole at assembly (x, y) is (x, -y) in its part space.
-    for x, y in ((45, 0), (0, 45), (-45, 0), (0, -45)):
-        lock = "plane:XZ" if y == 0 else "plane:YZ"  # must contain the hole axis
-        head_washer = place(WASHER, x + 8, y + 6, 35)
-        constrain("insert", flange_a, f"circle:{x},{y},20,5.5", head_washer, "circle:0,0,0,5.25")
-        constrain("flush", flange_a, lock, head_washer, lock)
-        bolt = place(BOLT, x + 8, y + 6, 60, flip=True)
-        constrain("insert", head_washer, "circle:0,0,2,5.25", bolt, "circle:0,0,6.4,5")
-        constrain("flush", flange_b, lock, bolt, lock)
-        nut_washer = place(WASHER, x + 8, y + 6, -35, flip=True)
-        constrain("insert", flange_b, f"circle:{x},{-y},20,5.5", nut_washer, "circle:0,0,0,5.25")
-        constrain("flush", flange_b, lock, nut_washer, lock)
-        nut = place(NUT, x + 8, y + 6, -50, flip=True)
-        constrain("insert", nut_washer, "circle:0,0,2,5.25", nut, "circle:0,0,0,7")
-        constrain("flush", flange_b, lock, nut, lock)
+    # Content Center parts run along their X axis with the seating face on x = 0.
+    # Their XY plane contains that axis, so flushing it to the flange XZ plane stops the spin.
+    head_washer = place_cc(WASHER, 53, 6, 35)
+    constrain("insert", flange_a, "circle:45,0,20,5.5", head_washer, "circle:0,0,0,5.25")
+    constrain("flush", flange_a, "plane:XZ", head_washer, "plane:XY")
+    bolt = place_cc(BOLT, 53, 6, 60)
+    constrain("insert", head_washer, "circle:2,0,0,5.25", bolt, "circle:0,0,0,7.7")
+    constrain("flush", flange_b, "plane:XZ", bolt, "plane:XY")
+    nut_washer = place_cc(WASHER, 53, 6, -35)
+    constrain("insert", flange_b, "circle:45,0,20,5.5", nut_washer, "circle:0,0,0,5.25")
+    constrain("flush", flange_b, "plane:XZ", nut_washer, "plane:XY")
+    nut = place_cc(NUT, 53, 6, -50)
+    constrain("insert", nut_washer, "circle:2,0,0,5.25", nut, "circle:0,0,0,7.65")
+    constrain("flush", flange_b, "plane:XZ", nut, "plane:XY")
+
+    print(srv.pattern_component(", ".join((head_washer, bolt, nut_washer, nut)), flange_a, "axis:Z", 4))
     print(srv.transaction("commit"))
 except Exception:
     print(srv.transaction("abort"))
     raise
 
 print(srv.save_document(str(OUT)))
-print("BOM parts only:", srv.get_bom("parts"))
 print("BOM structured:", srv.get_bom("structured"))
-print("DOF:", srv.get_dof())
-print("Interference:", srv.analyze_interference())
+print("Occurrences:", srv.list_occurrences())
 
 bom = {row["file"]: row["quantity"] for row in json.loads(srv.get_bom("parts"))}
-expected = {FLANGE.name: 2, SHAFT.name: 2, BOLT.name: 4, NUT.name: 4, WASHER.name: 8}
+by_name = {v.split(":")[0]: k for k, v in files.items()}
+expected = {FLANGE.name: 2, SHAFT.name: 2,
+            by_name[bolt.split(":")[0]]: 4, by_name[nut.split(":")[0]]: 4,
+            by_name[head_washer.split(":")[0]]: 8}
 dof = json.loads(srv.get_dof())
 clashes = json.loads(srv.analyze_interference())
-pairs_ok = all({c["first"].split(":")[0], c["second"].split(":")[0]} ==
-               {BOLT.stem, NUT.stem} and c["cause"].startswith("thread") for c in clashes)
+print("BOM parts only:", bom)
+print("Free DOF:", dof["with_free_dof"])
+print("Interference:", json.dumps(clashes, indent=1, ensure_ascii=False))
+bolt_nut = {srv.inv._cc_key(bolt.split(":")[0]), srv.inv._cc_key(nut.split(":")[0])}
+pairs_ok = all({srv.inv._cc_key(c["first"].split(":")[0]), srv.inv._cc_key(c["second"].split(":")[0])}
+               == bolt_nut and c["cause"].startswith("thread artifact") for c in clashes)
 print("BOM ok:", bom == expected, "| DOF 0:", dof["fully_constrained"],
       "| only bolt-nut thread artifacts:", pairs_ok and len(clashes) == 4)

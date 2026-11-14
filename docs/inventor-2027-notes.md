@@ -279,6 +279,33 @@ Verified while building the phase 3 tools (2027.1):
   A DIN 933 bolt in a DIN 934 nut whose tapped hole is cut at the minor diameter
   overlaps by 187.51 mm³ per pair.
 
+## Content Center
+
+- `app.ContentCenter.TreeViewTopNode` walks the category tree by `ChildNodes` and
+  `DisplayName` ("Fasteners" > "Bolts" > "Hex Head"). A node's `Families` holds the
+  families; reading every `DisplayName` the first time takes about 10 s per category,
+  later reads take about 1 s.
+- DIN families are listed by their replacement notice: "DIN 933 - replaced by DIN EN
+  24017", "DIN 934 - replaced by DIN EN 24032/28673/28674". Plain washers are
+  "DIN 125-1 A" / "DIN 125-1 B" with sizes "A 10,5".
+- `TableColumns` give `InternalName`s; `SIZE` and `DESIGNATION` hold the size text in the
+  locale's decimal mark and with doubled spaces ("M10  x 60", "A 10,5").
+  `row.Item(column index).Value` reads a cell.
+- `family.CreateMember(row)` returns `(path, failure code, message)` under pywin32 and
+  writes the part into the active project's Content Center folder (here
+  `<project>\Libraries\Content Center Files\en-US\DIN 933\DIN 933 - M10  x 60.ipt`).
+  Full signature: `CreateMember(Row, FailureReason, FailureMessage, Refresh, Custom,
+  FileName, CustomInput, Options)`.
+- Content Center fasteners run along their X axis. The bolt's head bearing face, the
+  nut's face and the washer's face lie on x = 0: bolt head edge r 7.7, nut face edge
+  r 7.65, washer bore r 5.25 at x = 0 and x = 2.
+- The DIN 934 nut has a tapped `HoleFeature` at the minor diameter; the DIN 933 bolt
+  has a `ThreadFeature` on a full-diameter shank. A pair overlaps by 176.85 mm³ when
+  seated on a washer, 128.75 mm³ when both sit on the same origin.
+- Occurrence names are the family name plus the size: "DIN 933 - replaced by DIN EN
+  24017 M10  x 60:1", "DIN 125-1 A A 10,5:1". They contain commas and doubled spaces,
+  so the wrapper matches names with collapsed whitespace and splits name lists on ":n".
+
 ## Wrapper fixes in phase 1
 
 - **Tools followed the active tab.** Activating another document between two calls

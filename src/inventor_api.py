@@ -2478,12 +2478,17 @@ class InventorConnection:
         self._constraint_logs[doc.InternalName] = []
         return f"Assembly created: {doc.DisplayName}"
 
+    @staticmethod
+    def _same_name(a: str, b: str) -> bool:
+        # Content Center names carry double spaces ("DIN 933 - M10  x 60:1").
+        return " ".join(a.lower().split()) == " ".join(b.lower().split())
+
     def _occurrence(self, name: str):
         occs = self.active_assembly().ComponentDefinition.Occurrences
         names = []
         for i in range(1, occs.Count + 1):
             o = occs.Item(i)
-            if o.Name.lower() == name.lower():
+            if self._same_name(o.Name, name):
                 return o
             names.append(o.Name)
         raise ValueError(f"No component named {name!r}. Components: {names}")
@@ -2516,6 +2521,82 @@ class InventorConnection:
         if grounded:
             occ.Grounded = True
         return f"Placed {occ.Name}{' (grounded)' if grounded else ''}: {self._pose(occ)}"
+
+    # Content Center members are generated into the active project's Content Center
+    # folder, as Inventor's own Place from Content Center does.
+
+    def _cc_node(self, category: str):
+        node = self.app.ContentCenter.TreeViewTopNode
+        for part in [p.strip() for p in category.replace("\\", "/").split("/") if p.strip()]:
+            children = {node.ChildNodes.Item(i).DisplayName.lower(): node.ChildNodes.Item(i)
+                        for i in range(1, node.ChildNodes.Count + 1)}
+            if part.lower() not in children:
+                raise ValueError(f"No Content Center category {part!r} under {node.DisplayName or 'the top'}: "
+                                 f"{sorted(c.DisplayName for c in children.values())}")
+            node = children[part.lower()]
+        return node
+
+    def _cc_families(self, category: str) -> dict:
+        # Reading family names is slow (seconds per category), so keep them per session.
+        cache = self.__dict__.setdefault("_cc_cache", {})
+        key = category.lower().strip("/ ")
+        if key not in cache:
+            fams = self._cc_node(category).Families
+            cache[key] = {fams.Item(j).DisplayName: fams.Item(j) for j in range(1, fams.Count + 1)}
+        return cache[key]
+
+    def _cc_family(self, category: str, family: str):
+        fams = self._cc_families(category)
+        for name, fam in fams.items():
+            if name.lower() == family.lower():
+                return fam
+        starts = [n for n in fams if n.lower().startswith(family.lower())]
+        if len(starts) == 1:
+            return fams[starts[0]]
+        raise ValueError(f"Family {family!r} in {category}: "
+                         + (f"ambiguous, matches {starts}" if starts else "not found; list_content_center shows the names"))
+
+    @staticmethod
+    def _cc_key(text: str) -> str:
+        # Designations use the locale decimal mark and odd spacing: "A 10,5", "M10  x 60".
+        return " ".join(text.lower().replace(",", ".").split())
+
+    def _cc_sizes(self, fam) -> list:
+        cols = fam.TableColumns
+        names = [cols.Item(i).InternalName for i in range(1, cols.Count + 1)]
+        col = names.index("SIZE") + 1 if "SIZE" in names else names.index("DESIGNATION") + 1
+        rows = fam.TableRows
+        return [(rows.Item(i), rows.Item(i).Item(col).Value) for i in range(1, rows.Count + 1)]
+
+    def list_content_center(self, category: str = "", family: str = "", contains: str = "") -> dict:
+        """Browse Content Center: subcategories and families of a category, or a family's sizes."""
+        if family:
+            sizes = [s for _, s in self._cc_sizes(self._cc_family(category, family))
+                     if self._cc_key(contains) in self._cc_key(s)]
+            return {"family": family, "sizes": sizes}
+        node = self._cc_node(category)
+        out = {"category": category or "(top)",
+               "subcategories": [node.ChildNodes.Item(i).DisplayName for i in range(1, node.ChildNodes.Count + 1)]}
+        if category:
+            out["families"] = sorted(n for n in self._cc_families(category) if contains.lower() in n.lower())
+        return out
+
+    def content_center_member(self, category: str, family: str, size: str) -> str:
+        """Path of a Content Center part, generated on first use."""
+        fam = self._cc_family(category, family)
+        rows = [r for r, s in self._cc_sizes(fam) if self._cc_key(s) == self._cc_key(size)]
+        if not rows:
+            raise ValueError(f"No size {size!r} in {fam.DisplayName}; list_content_center shows the sizes")
+        path, _, message = fam.CreateMember(rows[0])
+        if not path or not os.path.exists(path):
+            raise RuntimeError(f"Content Center could not create {fam.DisplayName} {size}: {message}")
+        return path
+
+    def place_content_center(self, category: str, family: str, size: str, x: float = 0, y: float = 0,
+                             z: float = 0, rx: float = 0, ry: float = 0, rz: float = 0,
+                             grounded: bool = False) -> str:
+        path = self.content_center_member(category, family, size)
+        return self.place_component(path, x, y, z, rx, ry, rz, grounded) + f" | file {path}"
 
     def _native_geometry(self, definition, selector: str):
         """Resolve a selector on a part (or the assembly's own) component definition."""
@@ -2666,7 +2747,7 @@ class InventorConnection:
         """Free translations and rotations of one component, or of all of them."""
         rows = self.list_occurrences()
         if occurrence:
-            rows = [r for r in rows if r["name"].lower() == occurrence.lower()]
+            rows = [r for r in rows if self._same_name(r["name"], occurrence)]
             if not rows:
                 raise ValueError(f"No component named {occurrence!r}")
         free = [r["name"] for r in rows if r["free_translations"] or r["free_rotations"]]
@@ -2698,7 +2779,7 @@ class InventorConnection:
 
     def analyze_interference(self) -> list[dict]:
         """Every overlapping pair with its volume. Tapped holes are cut at the minor diameter,
-        so a pair involving one is marked as a thread artifact, not a real clash."""
+        so a tapped part against a threaded one is a thread artifact, not a real clash."""
         ad = self.active_assembly().ComponentDefinition
         col = self.app.TransientObjects.CreateObjectCollection()
         for i in range(1, ad.Occurrences.Count + 1):
@@ -2712,6 +2793,19 @@ class InventorConnection:
             except Exception:
                 return False
 
+        def threaded(occ):
+            try:
+                return occ.Definition.Features.ThreadFeatures.Count > 0
+            except Exception:
+                return False
+
+        def cause(a, b):
+            if (tapped(a) and threaded(b)) or (tapped(b) and threaded(a)):
+                return "thread artifact: tapped hole modelled at the minor diameter"
+            if tapped(a) or tapped(b):
+                return "likely thread artifact: tapped hole, but the other part has no thread feature"
+            return "real overlap"
+
         out = []
         for i in range(1, results.Count + 1):
             r = results.Item(i)
@@ -2719,8 +2813,7 @@ class InventorConnection:
             c = r.Centroid
             out.append({"first": a.Name, "second": b.Name, "volume_mm3": round(r.Volume * 1000, 2),
                         "centroid_mm": [round(c.X * 10, 1), round(c.Y * 10, 1), round(c.Z * 10, 1)],
-                        "cause": ("thread artifact: tapped hole modelled at the minor diameter"
-                                  if tapped(a) or tapped(b) else "real overlap")})
+                        "cause": cause(a, b)})
         return out
 
     def pattern_component(self, occurrences: str, axis_occurrence: str, axis: str,
@@ -2730,7 +2823,8 @@ class InventorConnection:
         import math
         ad = self.active_assembly().ComponentDefinition
         col = self.app.TransientObjects.CreateObjectCollection()
-        for name in [n.strip() for n in occurrences.split(",") if n.strip()]:
+        # Names end in ":n" and may hold commas themselves ("DIN 125-1 A A 10,5:1").
+        for name in re.findall(r"\s*(.+?:\d+)\s*(?:,|$)", occurrences):
             col.Add(self._occurrence(name))
         axis_entity = self._geometry(axis_occurrence, axis)
         step = angle / count if abs(angle - 360) < 1e-9 else angle / max(count - 1, 1)

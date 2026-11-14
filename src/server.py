@@ -900,6 +900,38 @@ def place_component(path: str, x: float = 0, y: float = 0, z: float = 0, rx: flo
 
 
 @mcp.tool()
+def list_content_center(category: str = "", family: str = "", contains: str = "") -> str:
+    """Browse Inventor's Content Center library.
+
+    Args:
+        category: path such as "Fasteners/Bolts/Hex Head"; empty lists the top categories.
+        family: with a category, lists that family's sizes, e.g. "DIN 933".
+        contains: filter families or sizes by this text, e.g. "DIN" or "M10".
+    """
+    return json.dumps(inv.list_content_center(category, family, contains), indent=1, ensure_ascii=False)
+
+
+@mcp.tool()
+def place_content_center(category: str, family: str, size: str, x: float = 0, y: float = 0,
+                         z: float = 0, rx: float = 0, ry: float = 0, rz: float = 0,
+                         grounded: bool = False) -> str:
+    """Place a standard part from Content Center in the active assembly.
+
+    The part file is generated into the active project's Content Center folder on first
+    use. Content Center parts have their axis along X: a bolt's head bearing face, a
+    nut's face and a washer's face lie on x = 0 (circle:0,0,0,r selectors).
+
+    Args:
+        category: e.g. "Fasteners/Bolts/Hex Head", "Fasteners/Nuts/Hex", "Fasteners/Washers/Plain".
+        family: full name or unique start, e.g. "DIN 933", "DIN 934", "DIN 125-1 A".
+        size: designation as list_content_center shows it; spacing and decimal mark
+              are ignored, e.g. "M10 x 60", "M10", "A 10.5".
+        x, y, z, rx, ry, rz, grounded: as in place_component.
+    """
+    return inv.place_content_center(category, family, size, x, y, z, rx, ry, rz, grounded)
+
+
+@mcp.tool()
 def list_occurrences() -> str:
     """Components in the active assembly with file, grounded state, origin (mm) and free DOF."""
     return json.dumps(inv.list_occurrences(), indent=1, ensure_ascii=False)
@@ -965,7 +997,7 @@ def get_bom(view: str = "parts") -> str:
 @mcp.tool()
 def analyze_interference() -> str:
     """Overlapping component pairs with volume (mm³) and centroid. Pairs with a tapped hole
-    are marked as thread artifacts, since tapped holes are modelled at the minor diameter."""
+    against a threaded part are thread artifacts, since tapped holes are modelled at the minor diameter."""
     return json.dumps(inv.analyze_interference(), indent=1)
 
 

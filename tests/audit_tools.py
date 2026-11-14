@@ -795,6 +795,24 @@ def assembly():
         return clashes
     check("analyze_interference", interference)
 
+    def browse_cc():
+        top = json.loads(srv.list_content_center())["subcategories"]
+        assert "Fasteners" in top, top
+        fams = json.loads(srv.list_content_center("Fasteners/Nuts/Hex", contains="DIN 934"))["families"]
+        sizes = json.loads(srv.list_content_center("Fasteners/Nuts/Hex", "DIN 934", "M10"))["sizes"]
+        assert "M10" in sizes, sizes
+        return f"{fams}; sizes {sizes}"
+    check("list_content_center", browse_cc)
+
+    def cc_thread():
+        # Bolt and nut on the same origin: the shank runs through the nut's minor-diameter bore.
+        srv.place_content_center("Fasteners/Bolts/Hex Head", "DIN 933", "M10 x 60", 200, grounded=True)
+        out = srv.place_content_center("Fasteners/Nuts/Hex", "DIN 934", "m10", 200, grounded=True)
+        clashes = [c for c in json.loads(srv.analyze_interference()) if "DIN" in c["first"] + c["second"]]
+        assert len(clashes) == 1 and clashes[0]["cause"].startswith("thread artifact"), clashes
+        return f"{out.split(' | ')[0]}; {clashes[0]['volume_mm3']} mm3 thread artifact"
+    check("place_content_center + thread artifact", cc_thread)
+
     def save_log():
         out = srv.save_document(str(OUT / "audit_assembly.iam"))
         log = json.loads((OUT / "audit_assembly.constraints.json").read_text(encoding="utf-8"))
