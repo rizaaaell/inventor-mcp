@@ -172,6 +172,7 @@ Diisi oleh sesi Claude Code setiap akhir fase. Entri terbaru di bawah.
 |2026-11-14|2|Menunggu konfirmasi|Revisi keempat: style Arjuna kini benar-benar dipakai (Arjuna Standard / Object Defaults / Leader / Note Text, karena style library menimpa style bernama sama); toleransi umum .X ±0,2 .XX ±0,1 .XXX ±0,05 dari profil; tata letak flens mengikuti baseline: diameter sebagai dimensi Ø linear di luar section, front view hanya PCD + hole note + frame position, datum B dan Ra 1,6 di garis ekstensi Ø30 H7. add_dimension prefix, leader ke titik bebas, FCF tanpa leader; list_views juga melaporkan teks di luar border. Audit 85 PASS, smoke 7/7.|
 |2026-11-14|2|Menunggu konfirmasi|Revisi kelima: top view dengan garis tersembunyi (lubang dan bore); lokasi lubang lewat PCD Ø90 basic dan sudut 90° basic, dirujuk oleh position Ø0,2 A B; add_dimension kind 'angle'. Audit 86 PASS, smoke 7/7.|
 |2026-11-14|2|Menunggu konfirmasi|Revisi keenam: garis sumbu dan lingkaran PCD jadi titik-strip (layer centerline ISO menggambar lingkaran sebagai strip biasa yang mirip hidden line); PCD masuk ke hole note '4x Ø11 THRU / EQ SP ON PCD Ø90' dengan frame position di bawahnya; chamfer jadi catatan '2x 1 X 45°' (tool add_chamfer_note). Audit 87 PASS, smoke 7/7.|
+|2026-11-14|2|Menunggu konfirmasi|Revisi ketujuh: center mark setiap lubang dan lingkaran utama diperpanjang melewati tepi lingkaran (center mark pola otomatis yang terkunci diganti center mark biasa); top view mendapat sumbu lubang tersembunyi. Audit 87 PASS, smoke 7/7.|
 
 
 

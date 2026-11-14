@@ -217,6 +217,10 @@ The translators report `Activated = False` until used; call `Activate()` first.
 - The ISO centerline layer draws a circular centerline (a bolt circle) as plain dashes, which reads
   as a hidden line. Setting the layer's `LineType` to 37644 (`kChainLineType`) gives the long dash,
   short dash chain that ISO 128 asks for, on straight and circular centerlines alike.
+- Automated center marks stop inside the hole. `Centermark.ExtensionPointOne..Four` move the
+  ends of the extension lines (+X, +Y, -X, -Y); they read `None` until set. Marks that belong
+  to a hole pattern refuse the X legs; hide them (`Visible = False`) and add a plain mark with
+  `Centermarks.Add(sheet.CreateGeometryIntent(circle, 57860), True)` instead.
 - `DrawingNotes.ChamferNotes.Add(position, chamferCurve, adjacentCurve)` gives "1 X 45°"; its
   default format carries a zero symmetric tolerance ("1 ± 0 X 45° ± 0°"), strip the Tolerance
   attributes from `FormattedChamferNote`. A chamfer note's `Text` is a plain string.

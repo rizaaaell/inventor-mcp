@@ -1791,9 +1791,70 @@ class InventorConnection:
         v.SetAutomatedCenterlineSettings(settings)
         overshoot = float(self._profile_of(doc).get("centerline_overshoot_mm", 3))
         extended, added = self._complete_axes(sheet, v, overshoot)
+        marked = self._extend_centermarks(sheet, v, overshoot)
         return (f"Centerlines on {v.Name}: +{sheet.Centerlines.Count - lines} centerline(s), "
                 f"+{sheet.Centermarks.Count - marks} centermark(s); {extended} axis line(s) "
-                f"stretched and {added} added to span their cylinders + {overshoot:g} mm")
+                f"stretched and {added} added to span their cylinders + {overshoot:g} mm; "
+                f"{marked} center mark(s) run past their circle")
+
+    def _extend_centermarks(self, sheet, view, overshoot_mm: float) -> int:
+        """Run each center mark's extension lines past the largest circle around it.
+
+        Automated marks stop inside the hole; marks of a hole pattern refuse new extension
+        points, so those are hidden and replaced by a plain mark on the same circle.
+        """
+        tg = self._tg()
+        rect = self._view_rect(view)
+        circles = []  # (curve, center x, center y, radius) in sheet cm
+        curves = view.DrawingCurves
+        for i in range(1, curves.Count + 1):
+            curve = curves.Item(i)
+            segments = curve.Segments
+            if segments.Count != 1:
+                continue
+            g = segments.Item(1).Geometry
+            try:
+                if segments.Item(1).HiddenLine:
+                    continue
+                circles.append((curve, g.Center.X, g.Center.Y, g.Radius))
+            except Exception:
+                continue  # not a circle
+        if not circles:
+            return 0
+
+        def around(x, y):
+            same = [c for c in circles if abs(c[1] - x) < 1e-3 and abs(c[2] - y) < 1e-3]
+            return max(same, key=lambda c: c[3]) if same else None
+
+        def stretch(mark, radius) -> bool:
+            p = mark.Position
+            r = radius + overshoot_mm / 10.0
+            try:
+                for name, (dx, dy) in zip(("One", "Two", "Three", "Four"),
+                                          ((r, 0), (0, r), (-r, 0), (0, -r))):
+                    setattr(mark, f"ExtensionPoint{name}", tg.CreatePoint2d(p.X + dx, p.Y + dy))
+                return True
+            except Exception:
+                return False
+
+        done = 0
+        marks = sheet.Centermarks
+        for mark in [marks.Item(i) for i in range(1, marks.Count + 1)]:
+            if not mark.Visible:
+                continue
+            p = mark.Position
+            if not (rect[0] <= p.X * 10 <= rect[2] and rect[1] <= p.Y * 10 <= rect[3]):
+                continue
+            circle = around(p.X, p.Y)
+            if circle is None:
+                continue
+            if not stretch(mark, circle[3]):
+                mark.Visible = False
+                replacement = marks.Add(sheet.CreateGeometryIntent(circle[0], 57860), True)  # center
+                if not stretch(replacement, circle[3]):
+                    continue
+            done += 1
+        return done
 
     def _complete_axes(self, sheet, view, overshoot_mm: float):
         """Make one centerline per cylinder or cone axis lying in the view plane, spanning
