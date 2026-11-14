@@ -492,7 +492,21 @@ def sheet_metal():
 def drawing():
     """All drawing tools on an A3 sheet of the solid block saved by solid_block()."""
     model = str(OUT / "audit_solid.ipt")
-    check("create_drawing", lambda: srv.create_drawing("iso", "A3"))
+    def create():
+        out = srv.create_drawing()
+        std = srv.inv.active_drawing().StylesManager.ActiveStandardStyle
+        assert "third angle" in out and not std.FirstAngleProjection, out
+        assert std.GetViewAnnotationDefaults(10503) == "<DrawingViewName/>", "section line label not from profile"
+        return out
+    check("create_drawing applies the default profile", create)
+
+    def unknown_profile():
+        try:
+            srv.create_drawing("no_such_profile")
+        except ValueError as exc:
+            return str(exc)
+        raise AssertionError("unknown profile accepted")
+    check("create_drawing rejects an unknown profile", unknown_profile)
 
     def rejected():
         try:
@@ -556,7 +570,7 @@ def drawing():
 
     def linear():
         out = srv.add_dimension(state["top"], "horizontal", -50, 0, 50, 0, text_x=0, text_y=-25)
-        assert out.split()[2] == "100,00", out
+        assert out.split()[2] == "100", out  # the default profile drops trailing zeros
         return out
     check("add_dimension horizontal", linear)
 
@@ -579,6 +593,27 @@ def drawing():
         assert len(info["views"]) == 4, info["views"]
         return f"{len(info['views'])} views, {info['dimensions']} dimensions, problems: {info['problems'] or 'none'}"
     check("list_views", views)
+
+    def hole_note():
+        out = srv.add_hole_note(state["front"], 0, 39, -55, 60)
+        assert "4x" in out and "n8" in out, out
+        return out
+    check("add_hole_note on the patterned hole", hole_note)
+
+    def pcd():
+        out = srv.add_dimension(state["front"], "pcd", 0, -35, text_x=-55, text_y=-62)
+        assert out.split()[2] == "n70", out
+        return out
+    check("add_dimension pcd", pcd)
+
+    def delete_dims():
+        listed = json.loads(srv.list_dimensions())
+        target = [d for d in listed if d["view"] == state["front"] and d["text"] == "n8"]
+        assert target, f"no retrieved n8 in the front view: {listed}"
+        out = srv.delete_dimension(str(target[0]["index"]))
+        assert len(json.loads(srv.list_dimensions())) == len(listed) - 1, "count did not drop"
+        return out
+    check("list_dimensions + delete_dimension", delete_dims)
 
     def png():
         path = OUT / "audit_drawing.png"

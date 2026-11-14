@@ -135,12 +135,14 @@ def drawing_case(inv):
             inv.add_centerlines(v)
             inv.retrieve_dimensions(v)
         layout = inv.list_views()
+        texts = [d["text"] for d in inv.list_dimensions()]
         inv.export_pdf(str(pdf))
     finally:
         drawing.Close(True)
         part.Close(True)
     assert [v["name"] for v in layout["views"]] == [front, top, section], layout["views"]
     assert layout["dimensions"] == 8, f"{layout['dimensions']} dimensions, expected 8"
+    assert not any(",00" in t for t in texts), f"trailing zeros despite the profile: {texts}"
     assert not layout["problems"], layout["problems"]
     box = re.search(rb"/MediaBox\s*\[0 0 (\d+) (\d+)\]", pdf.read_bytes())
     assert box and (int(box.group(1)), int(box.group(2))) == (1191, 842), "PDF is not one A3 landscape page"
