@@ -1,5 +1,6 @@
 """Wrapper around Autodesk Inventor COM API."""
 
+import json
 import os
 import win32com.client
 import pythoncom
@@ -203,6 +204,14 @@ class InventorConnection:
         doc = self.active_document()
         if path:
             path = os.path.abspath(path)
+            # SaveAs onto a file another open document holds fails with a bare E_INVALIDARG.
+            for i in range(1, self.app.Documents.Count + 1):
+                other = self.app.Documents.Item(i)
+                if (other.InternalName != doc.InternalName and other.FullFileName
+                        and os.path.normcase(other.FullFileName) == os.path.normcase(path)):
+                    raise RuntimeError(
+                        f"{path} is open in Inventor as '{other.DisplayName}'. Close it first "
+                        "or save under another name.")
             doc.SaveAs(path, False)
             return f"Saved as: {path}"
         doc.Save()
@@ -214,30 +223,38 @@ class InventorConnection:
         "IGES": "{90AF7F44-0C01-11D5-8E83-0010B541CD80}",
         "SAT": "{89162634-02B6-11D5-8E80-0010B541CD80}",
         "STL": "{533E9A98-FC3B-11D4-8E7E-0010B541CD80}",
+        "PDF": "{0AC6FD96-2F4D-42CE-8BE0-8AEA580399E4}",
     }
 
-    def export_document(self, path: str, format: str = "STEP") -> str:
-        doc = self.active_document()
-        path = os.path.abspath(path)
-
-        format_upper = format.upper()
-        class_id = self._TRANSLATORS.get(format_upper)
-        if class_id is None:
-            raise ValueError(f"Unsupported format: {format}. Use STEP, STL, SAT, or IGES.")
-        translator = self.app.ApplicationAddIns.ItemById(class_id)
+    def _translate(self, doc, format_upper: str, path: str, overrides: dict | None = None) -> None:
+        translator = self.app.ApplicationAddIns.ItemById(self._TRANSLATORS[format_upper])
         if not translator.Activated:
             translator.Activate()
-
         context = self.app.TransientObjects.CreateTranslationContext()
         context.Type = 13059  # kFileBrowseIOMechanism
         options = self.app.TransientObjects.CreateNameValueMap()
         data_medium = self.app.TransientObjects.CreateDataMedium()
         data_medium.FileName = path
-
         translator.HasSaveCopyAsOptions(doc, context, options)  # fills in the defaults
+        for key, value in (overrides or {}).items():
+            self._put_indexed(options, "Value", key, value)
         translator.SaveCopyAs(doc, context, options, data_medium)
         if not os.path.exists(path):
             raise RuntimeError(f"{format_upper} translator wrote no file at {path}")
+
+    @staticmethod
+    def _put_indexed(obj, prop: str, index, value) -> None:
+        """obj.prop(index) = value. Late binding has no syntax for an indexed property put."""
+        dispid = obj._oleobj_.GetIDsOfNames(prop)
+        obj._oleobj_.Invoke(dispid, 0, pythoncom.DISPATCH_PROPERTYPUT, 0, index, value)
+
+    def export_document(self, path: str, format: str = "STEP") -> str:
+        doc = self.active_document()
+        path = os.path.abspath(path)
+        format_upper = format.upper()
+        if format_upper not in ("STEP", "STL", "SAT", "IGES"):
+            raise ValueError(f"Unsupported format: {format}. Use STEP, STL, SAT, or IGES.")
+        self._translate(doc, format_upper, path)
         return f"Exported to: {path} ({format_upper})"
 
     # ---------- Sketches ----------
@@ -1308,3 +1325,457 @@ class InventorConnection:
             f"{k}={v}" for k, v in [("x", x), ("y", y), ("z", z)] if v is not None
         )
         raise ValueError(f"No face matching centroid ({criteria}) area≥{min_area} tol={tolerance}mm")
+
+    # ---------- Drawings ----------
+    # Sheet coordinates are mm from the sheet's bottom-left corner. Points inside a
+    # view are mm in model units from the view center, x right and y up on the sheet.
+
+    # Inventor's own ISO template. Project templates from older releases make
+    # Documents.Add fail until they are opened and saved once in 2027.
+    DRAWING_TEMPLATE = (r"C:\Users\Public\Documents\Autodesk\Inventor {year}"
+                        r"\Templates\en-US\Metric\ISO.idw")
+    _SHEET_SIZES = {"A0": 9993, "A1": 9994, "A2": 9995, "A3": 9996, "A4": 9997}
+    _VIEW_ORIENTATIONS = {
+        "front": 10764, "top": 10754, "right": 10755, "back": 10756, "bottom": 10757,
+        "left": 10758, "iso_top_right": 10759, "iso_top_left": 10760,
+        "iso_bottom_right": 10761, "iso_bottom_left": 10762,
+    }
+    _VIEW_STYLES = {"hidden": 32257, "visible": 32258, "shaded": 32259,
+                    "from_base": 32260, "shaded_hidden": 32261}
+    _TITLE_FIELDS = {
+        "title": ("Summary Information", "Title"),
+        "subject": ("Summary Information", "Subject"),
+        "author": ("Summary Information", "Author"),
+        "revision": ("Summary Information", "Revision Number"),
+        "company": ("Document Summary Information", "Company"),
+        "part_number": ("Design Tracking Properties", "Part Number"),
+        "description": ("Design Tracking Properties", "Description"),
+        "designer": ("Design Tracking Properties", "Designer"),
+        "checked_by": ("Design Tracking Properties", "Checked By"),
+        "approved_by": ("Design Tracking Properties", "Engr Approved By"),
+    }
+
+    def active_drawing(self):
+        doc = self.active_document()
+        if doc.DocumentType != 12292:  # kDrawingDocumentObject
+            raise RuntimeError(f"Active document is not a drawing (type={doc.DocumentType}).")
+        return doc
+
+    def create_drawing(self, template: str = "iso", sheet_size: str = "A3") -> str:
+        if template.lower() == "iso":
+            year = str(self.app.SoftwareVersion.DisplayVersion).split(".")[0]
+            template = self.DRAWING_TEMPLATE.format(year=year)
+        if not os.path.exists(template):
+            raise RuntimeError(f"Drawing template not found: {template}")
+        try:
+            doc = self._add_document(12292, template)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Inventor refused template {template} ({exc}). A template from an older "
+                "release has to be opened and saved once in this version first.") from exc
+        sheet = doc.ActiveSheet
+        if sheet_size:
+            size = self._SHEET_SIZES.get(sheet_size.upper())
+            if size is None:
+                raise ValueError(f"Unknown sheet size {sheet_size}. Use {', '.join(self._SHEET_SIZES)}.")
+            sheet.Size = size
+        self.pin_document(doc)
+        std = doc.StylesManager.ActiveStandardStyle
+        angle = "first" if std.FirstAngleProjection else "third"
+        return (f"Drawing created: {doc.DisplayName}, sheet {sheet.Width * 10:.0f}x"
+                f"{sheet.Height * 10:.0f} mm, {std.Name}, {angle} angle projection")
+
+    @staticmethod
+    def _rect(obj):
+        r = obj.RangeBox
+        return (r.MinPoint.X * 10, r.MinPoint.Y * 10, r.MaxPoint.X * 10, r.MaxPoint.Y * 10)
+
+    @staticmethod
+    def _view_rect(view):
+        return (view.Left * 10, (view.Top - view.Height) * 10,
+                (view.Left + view.Width) * 10, view.Top * 10)
+
+    @staticmethod
+    def _fmt_rect(r):
+        return f"x {r[0]:.1f}..{r[2]:.1f} y {r[1]:.1f}..{r[3]:.1f} mm"
+
+    @staticmethod
+    def _overlap(a, b, gap: float = 0.0):
+        return a[0] < b[2] + gap and b[0] < a[2] + gap and a[1] < b[3] + gap and b[1] < a[3] + gap
+
+    def _drawing_area(self, sheet):
+        try:
+            return self._rect(sheet.Border)
+        except Exception:
+            return (0.0, 0.0, sheet.Width * 10, sheet.Height * 10)
+
+    def _sheet_point(self, x: float, y: float):
+        return self._tg().CreatePoint2d(x / 10.0, y / 10.0)
+
+    def _view_point(self, view, x: float, y: float):
+        """Sheet point (cm) of a point given in model mm from the view center."""
+        c, s = view.Center, view.Scale
+        return self._tg().CreatePoint2d(c.X + x * s / 10.0, c.Y + y * s / 10.0)
+
+    def _view(self, name: str):
+        views = self.active_drawing().ActiveSheet.DrawingViews
+        names = []
+        for i in range(1, views.Count + 1):
+            v = views.Item(i)
+            if v.Name.lower() == name.lower():
+                return v
+            names.append(v.Name)
+        raise ValueError(f"No view named {name!r}. Views on this sheet: {names}")
+
+    def _place_check(self, sheet, view):
+        """Delete and reject a new view that leaves the border or overlaps something."""
+        rect = self._view_rect(view)
+        area = self._drawing_area(sheet)
+        problems = []
+        if rect[0] < area[0] or rect[1] < area[1] or rect[2] > area[2] or rect[3] > area[3]:
+            problems.append(f"outside the border ({self._fmt_rect(area)})")
+        if sheet.TitleBlock is not None and self._overlap(rect, self._rect(sheet.TitleBlock)):
+            problems.append(f"overlaps the title block ({self._fmt_rect(self._rect(sheet.TitleBlock))})")
+        views = sheet.DrawingViews
+        for i in range(1, views.Count + 1):
+            other = views.Item(i)
+            if other.Name != view.Name and self._overlap(rect, self._view_rect(other)):
+                problems.append(f"overlaps view {other.Name} ({self._fmt_rect(self._view_rect(other))})")
+        if problems:
+            view.Delete()
+            raise ValueError(f"View would sit at {self._fmt_rect(rect)}: {'; '.join(problems)}. "
+                             "Move it or change the scale.")
+        return rect
+
+    def _open_model(self, model_path: str):
+        path = os.path.abspath(model_path)
+        for i in range(1, self.app.Documents.Count + 1):
+            d = self.app.Documents.Item(i)
+            if d.FullFileName and os.path.normcase(d.FullFileName) == os.path.normcase(path):
+                return d
+        if not os.path.exists(path):
+            raise RuntimeError(f"Model not found: {path}")
+        return self.app.Documents.Open(path, False)
+
+    def _style(self, style: str) -> int:
+        value = self._VIEW_STYLES.get(style.lower())
+        if value is None:
+            raise ValueError(f"Unknown view style {style}. Use {', '.join(self._VIEW_STYLES)}.")
+        return value
+
+    def add_base_view(self, model_path: str, x: float, y: float, scale: float = 1.0,
+                      orientation: str = "front", style: str = "visible") -> str:
+        sheet = self.active_drawing().ActiveSheet
+        orient = self._VIEW_ORIENTATIONS.get(orientation.lower())
+        if orient is None:
+            raise ValueError(f"Unknown orientation {orientation}. Use {', '.join(self._VIEW_ORIENTATIONS)}.")
+        model = self._open_model(model_path)
+        view = sheet.DrawingViews.AddBaseView(
+            model, self._sheet_point(x, y), scale, orient, self._style(style))
+        rect = self._place_check(sheet, view)
+        return f"Base view {view.Name}: {orientation}, scale {scale:g}, {self._fmt_rect(rect)}"
+
+    def add_projected_view(self, parent: str, x: float, y: float, style: str = "from_base") -> str:
+        sheet = self.active_drawing().ActiveSheet
+        view = sheet.DrawingViews.AddProjectedView(
+            self._view(parent), self._sheet_point(x, y), self._style(style))
+        rect = self._place_check(sheet, view)
+        return f"Projected view {view.Name} from {parent}: {self._fmt_rect(rect)}"
+
+    def add_section_view(self, parent: str, x1: float, y1: float, x2: float, y2: float,
+                         x: float, y: float, label: str = "A", style: str = "from_base") -> str:
+        """Section line from (x1, y1) to (x2, y2) in the parent view, view placed at (x, y)."""
+        sheet = self.active_drawing().ActiveSheet
+        parent_view = self._view(parent)
+        sketch = parent_view.Sketches.Add()
+        sketch.Edit()
+        try:
+            p1 = sketch.SheetToSketchSpace(self._view_point(parent_view, x1, y1))
+            p2 = sketch.SheetToSketchSpace(self._view_point(parent_view, x2, y2))
+            sketch.SketchLines.AddByTwoPoints(p1, p2)
+        finally:
+            sketch.ExitEdit()
+        try:
+            view = sheet.DrawingViews.AddSectionView(
+                parent_view, sketch, self._sheet_point(x, y), self._style(style), None, True, label)
+            rect = self._place_check(sheet, view)
+        except Exception:
+            try:
+                sketch.Delete()
+            except Exception:
+                pass
+            raise
+        return f"Section view {view.Name} from {parent}: {self._fmt_rect(rect)}"
+
+    def add_detail_view(self, parent: str, cx: float, cy: float, radius: float,
+                        x: float, y: float, scale: float = 2.0, label: str = "B",
+                        style: str = "from_base") -> str:
+        """Circular detail of the parent around (cx, cy) with the given radius (model mm)."""
+        sheet = self.active_drawing().ActiveSheet
+        parent_view = self._view(parent)
+        view = sheet.DrawingViews.AddDetailView(
+            parent_view, self._sheet_point(x, y), self._style(style), True,
+            self._view_point(parent_view, cx, cy), radius * parent_view.Scale / 10.0,
+            None, scale, True, label)
+        rect = self._place_check(sheet, view)
+        return f"Detail view {view.Name} from {parent}: scale {scale:g}, {self._fmt_rect(rect)}"
+
+    def _annotation_boxes(self, sheet):
+        """View labels, plus estimated boxes for section line and detail fence labels.
+
+        The API gives no extent for the "A / .A6" label at each section line end or the
+        label above a detail circle, so those are boxes sized from the ISO text height.
+        """
+        boxes = []
+        views = sheet.DrawingViews
+        for i in range(1, views.Count + 1):
+            v = views.Item(i)
+            if v.ShowLabel:
+                try:
+                    boxes.append((f"label of {v.Name}", self._rect(v.Label)))
+                except Exception:
+                    pass
+            try:
+                lines = v.SectionLineSketch.SketchLines  # only section views have one
+                sk = v.SectionLineSketch
+                for j in range(1, lines.Count + 1):
+                    for end in (lines.Item(j).StartSketchPoint, lines.Item(j).EndSketchPoint):
+                        p = sk.SketchToSheetSpace(end.Geometry)
+                        x, y = p.X * 10, p.Y * 10
+                        boxes.append((f"section line label {v.Name}", (x - 5, y - 10, x + 40, y + 10)))
+            except Exception:
+                pass
+            try:
+                c, r = v.FenceCenter, v.FenceRadius  # only circular detail views
+                x, y, r = c.X * 10, c.Y * 10, r * 10
+                boxes.append((f"detail fence label {v.Name}", (x - r - 10, y + r, x + r + 10, y + r + 12)))
+            except Exception:
+                pass
+        return boxes
+
+    def _dimension_boxes(self, sheet):
+        boxes = []
+        dims = sheet.DrawingDimensions.GeneralDimensions
+        for i in range(1, dims.Count + 1):
+            d = dims.Item(i)
+            try:
+                boxes.append((f"dimension {d.Text.Text}", self._rect(d.Text)))
+            except Exception:
+                pass
+        return boxes
+
+    def _text_boxes(self, sheet):
+        return self._dimension_boxes(sheet) + self._annotation_boxes(sheet)
+
+    def _clashes(self, boxes):
+        # Two estimated boxes of the same section line or fence are one label, not a clash.
+        return [(boxes[i][0], boxes[j][0])
+                for i in range(len(boxes)) for j in range(i + 1, len(boxes))
+                if boxes[i][0] != boxes[j][0] and self._overlap(boxes[i][1], boxes[j][1])]
+
+    def _untangle(self, dims, view, obstacles=(), step_mm: float = 3.0, max_steps: int = 80) -> int:
+        """Push dimension texts apart, and off the given obstacle boxes (mm), until they clear.
+        A text that hits another dimension moves away from the view center; one that hits
+        an obstacle moves away from the obstacle's center."""
+        tg = self._tg()
+        c = view.Center
+        moves = 0
+        for _ in range(max_steps):
+            target, away = None, None
+            for i, d in enumerate(dims):
+                r = self._rect(d.Text)
+                for box in obstacles:
+                    if self._overlap(r, box, gap=1.0):
+                        target, away = d, ((box[0] + box[2]) / 20, (box[1] + box[3]) / 20)
+                        break
+                if target is None:
+                    for other in dims[i + 1:]:
+                        if self._overlap(r, self._rect(other.Text), gap=1.0):
+                            target, away = other, (c.X, c.Y)
+                            break
+                if target is not None:
+                    break
+            if target is None:
+                return moves
+            o = target.Text.Origin
+            dx, dy = o.X - away[0], o.Y - away[1]
+            n = (dx * dx + dy * dy) ** 0.5 or 1.0
+            target.Text.Origin = tg.CreatePoint2d(o.X + step_mm / 10 * dx / n, o.Y + step_mm / 10 * dy / n)
+            moves += 1
+        return moves
+
+    def retrieve_dimensions(self, view: str) -> str:
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        dims = sheet.DrawingDimensions.GeneralDimensions
+        before = dims.Count
+        retrievable = dims.GetRetrievableDimensions(v)
+        if retrievable is None or retrievable.Count == 0:
+            return f"No retrievable model dimensions in view {v.Name}"
+        dims.Retrieve(v, retrievable)
+        new = [dims.Item(i) for i in range(before + 1, dims.Count + 1)]
+        if new:
+            col = self.app.TransientObjects.CreateObjectCollection()
+            for d in new:
+                col.Add(d)
+            try:
+                sheet.DrawingDimensions.Arrange(col)
+            except Exception:
+                pass  # Arrange rejects some dimension mixes; _untangle still runs
+        obstacles = [box for _, box in self._annotation_boxes(sheet)]
+        moved = self._untangle(new, v, obstacles)
+        clashes = self._clashes(self._text_boxes(sheet))
+        values = ", ".join(d.Text.Text for d in new)
+        return (f"Retrieved {len(new)} dimension(s) in {v.Name}: {values}; "
+                f"{moved} text move(s) to clear overlaps; remaining text overlaps: {clashes or 'none'}")
+
+    def add_centerlines(self, view: str) -> str:
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        lines, marks = sheet.Centerlines.Count, sheet.Centermarks.Count
+        settings = v.GetAutomatedCenterlineSettings()
+        for flag in ("ApplyToHoles", "ApplyToCylinders", "ApplyToCircularPatterns",
+                     "ApplyToRevolutions", "ProjectionNormalAxis", "ProjectionParallelAxis"):
+            setattr(settings, flag, True)
+        v.SetAutomatedCenterlineSettings(settings)
+        return (f"Automated centerlines on {v.Name}: +{sheet.Centerlines.Count - lines} centerline(s), "
+                f"+{sheet.Centermarks.Count - marks} centermark(s)")
+
+    def _nearest_curve(self, view, x: float, y: float, circular: bool = False):
+        """Drawing curve of a view closest to a point given in model mm from the view center."""
+        p = self._view_point(view, x, y)
+        best, best_d = None, None
+        curves = view.DrawingCurves  # property get; calling it fails under late binding
+        for i in range(1, curves.Count + 1):
+            curve = curves.Item(i)
+            segments = curve.Segments
+            for j in range(1, segments.Count + 1):
+                g = segments.Item(j).Geometry
+                try:
+                    center, radius = g.Center, g.Radius
+                    d = abs(((p.X - center.X) ** 2 + (p.Y - center.Y) ** 2) ** 0.5 - radius)
+                    is_circle = True
+                except Exception:
+                    a, b = g.StartPoint, g.EndPoint
+                    vx, vy = b.X - a.X, b.Y - a.Y
+                    t = max(0.0, min(1.0, ((p.X - a.X) * vx + (p.Y - a.Y) * vy) / ((vx * vx + vy * vy) or 1e-12)))
+                    d = ((p.X - a.X - t * vx) ** 2 + (p.Y - a.Y - t * vy) ** 2) ** 0.5
+                    is_circle = False
+                if circular and not is_circle:
+                    continue
+                if best_d is None or d < best_d:
+                    best, best_d = curve, d
+        if best is None:
+            raise ValueError(f"No {'circular ' if circular else ''}curve in view {view.Name}")
+        return best, best_d * 10 / view.Scale
+
+    def add_dimension(self, view: str, kind: str, x1: float, y1: float,
+                      x2: float | None = None, y2: float | None = None,
+                      text_x: float = 0, text_y: float = 0) -> str:
+        """kind: diameter / radius (curve nearest x1,y1) or horizontal / vertical / aligned
+        (between the curves nearest x1,y1 and x2,y2). All points in model mm from the view center."""
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        dims = sheet.DrawingDimensions.GeneralDimensions
+        text = self._view_point(v, text_x, text_y)
+        kind = kind.lower()
+        if kind in ("diameter", "radius"):
+            curve, miss = self._nearest_curve(v, x1, y1, circular=True)
+            intent = sheet.CreateGeometryIntent(curve)
+            dim = dims.AddDiameter(text, intent) if kind == "diameter" else dims.AddRadius(text, intent)
+        elif kind in ("horizontal", "vertical", "aligned"):
+            if x2 is None or y2 is None:
+                raise ValueError(f"A {kind} dimension needs x2 and y2")
+            c1, m1 = self._nearest_curve(v, x1, y1)
+            c2, m2 = self._nearest_curve(v, x2, y2)
+            miss = max(m1, m2)
+            dim_type = {"aligned": 60161, "horizontal": 60162, "vertical": 60163}[kind]
+            dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1), sheet.CreateGeometryIntent(c2), dim_type)
+        else:
+            raise ValueError("kind must be diameter, radius, horizontal, vertical or aligned")
+        clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"dimension {dim.Text.Text}" in c]
+        return (f"{kind.capitalize()} dimension {dim.Text.Text} in {v.Name} "
+                f"(picked curve{'s' if kind not in ('diameter', 'radius') else ''} within {miss:.1f} mm); "
+                f"text overlaps: {clashes or 'none'}")
+
+    def set_title_block(self, fields: dict) -> str:
+        """Write iProperties of the drawing and return what the title block now shows."""
+        doc = self.active_drawing()
+        unknown = [k for k in fields if k.lower() not in self._TITLE_FIELDS]
+        if unknown:
+            raise ValueError(f"Unknown title block field(s) {unknown}. Use {', '.join(self._TITLE_FIELDS)}.")
+        props = doc.PropertySets
+        for key, value in fields.items():
+            set_name, prop = self._TITLE_FIELDS[key.lower()]
+            props.Item(set_name).Item(prop).Value = str(value)
+        # The ISO title block prints the author under "Designed by".
+        if "designer" in fields and "author" not in fields:
+            props.Item("Summary Information").Item("Author").Value = str(fields["designer"])
+        tb = doc.ActiveSheet.TitleBlock
+        if tb is None:
+            return "iProperties set; the sheet has no title block"
+        shown = {}
+        boxes = tb.Definition.Sketch.TextBoxes
+        for i in range(1, boxes.Count + 1):
+            t = boxes.Item(i)
+            if t.Text.startswith("<") and t.Text.count("<") == 1:
+                shown[t.Text.strip("<> ").lower()] = tb.GetResultText(t)
+        return json.dumps(shown, ensure_ascii=False)
+
+    def list_views(self) -> dict:
+        sheet = self.active_drawing().ActiveSheet
+        area = self._drawing_area(sheet)
+        views, problems = [], []
+        dv = sheet.DrawingViews
+        rects = {}
+        for i in range(1, dv.Count + 1):
+            v = dv.Item(i)
+            r = self._view_rect(v)
+            rects[v.Name] = r
+            views.append({
+                "name": v.Name,
+                "scale": round(v.Scale, 4),
+                "center_mm": [round(v.Center.X * 10, 1), round(v.Center.Y * 10, 1)],
+                "box_mm": [round(n, 1) for n in r],
+            })
+            if r[0] < area[0] or r[1] < area[1] or r[2] > area[2] or r[3] > area[3]:
+                problems.append(f"{v.Name} leaves the border")
+        names = list(rects)
+        for i in range(len(names)):
+            for j in range(i + 1, len(names)):
+                if self._overlap(rects[names[i]], rects[names[j]]):
+                    problems.append(f"{names[i]} overlaps {names[j]}")
+        if sheet.TitleBlock is not None:
+            tb = self._rect(sheet.TitleBlock)
+            problems += [f"{n} overlaps the title block" for n, r in rects.items() if self._overlap(r, tb)]
+        problems += [f"{a} overlaps {b}" for a, b in self._clashes(self._text_boxes(sheet))]
+        return {
+            "sheet_mm": [round(sheet.Width * 10, 1), round(sheet.Height * 10, 1)],
+            "border_mm": [round(n, 1) for n in area],
+            "title_block_mm": [round(n, 1) for n in self._rect(sheet.TitleBlock)] if sheet.TitleBlock else None,
+            "views": views,
+            "dimensions": sheet.DrawingDimensions.GeneralDimensions.Count,
+            "problems": problems,
+        }
+
+    def export_sheet_png(self, path: str, width: int = 2000) -> str:
+        """Picture of the whole active sheet, for checking the layout by eye."""
+        doc = self.active_drawing()
+        path = os.path.abspath(path)
+        sheet = doc.ActiveSheet
+        doc.Activate()
+        view = self.app.ActiveView
+        view.Fit()
+        height = int(round(width * sheet.Height / sheet.Width))
+        view.SaveAsBitmap(path, width, height)
+        return f"Sheet image: {path} ({width}x{height} px)"
+
+    def export_pdf(self, path: str, all_sheets: bool = True, black_lines: bool = True) -> str:
+        doc = self.active_drawing()
+        path = os.path.abspath(path)
+        self._translate(doc, "PDF", path, {
+            "Sheet_Range": 14082 if all_sheets else 14081,  # kPrintAllSheets / kPrintCurrentSheet
+            "All_Color_AS_Black": 1 if black_lines else 0,
+            "Vector_Resolution": 400,
+        })
+        return f"PDF: {path} ({os.path.getsize(path)} bytes)"

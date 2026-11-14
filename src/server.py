@@ -594,6 +594,158 @@ def suppress_feature(indices: str, suppressed: bool = True) -> str:
     return inv.suppress_feature(idx_list, suppressed)
 
 
+# ---------- Drawings ----------
+# Sheet positions are mm from the sheet's bottom-left corner. Points inside a view
+# are mm in model units from the view center (x right, y up on the sheet).
+
+@mcp.tool()
+def create_drawing(template: str = "iso", sheet_size: str = "A3") -> str:
+    """Create a drawing (.idw). Following drawing tools act on it.
+
+    Args:
+        template: "iso" for Inventor's own ISO template (first angle), or a full .idw path.
+                  Templates from older Inventor releases must be opened and saved once first.
+        sheet_size: A0, A1, A2, A3 or A4 (landscape as in the template).
+    """
+    return inv.create_drawing(template, sheet_size)
+
+
+@mcp.tool()
+def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
+                  orientation: str = "front", style: str = "visible") -> str:
+    """Place the first view of a part or assembly file, centered at (x, y) on the sheet.
+    A view that would leave the border or overlap the title block or another view is
+    removed again and an error says why.
+
+    Args:
+        model_path: .ipt or .iam file.
+        x, y: view center on the sheet, mm.
+        scale: 1.0 = 1:1, 0.5 = 1:2.
+        orientation: front, top, right, back, bottom, left, iso_top_right, iso_top_left,
+                     iso_bottom_right, iso_bottom_left. "front" looks along the part's -Z axis.
+        style: visible (hidden lines removed), hidden (hidden lines shown), shaded, shaded_hidden.
+    """
+    return inv.add_base_view(model_path, x, y, scale, orientation, style)
+
+
+@mcp.tool()
+def add_projected_view(parent: str, x: float, y: float, style: str = "from_base") -> str:
+    """Orthographic or isometric view projected from a parent view, centered at (x, y).
+    With first angle projection a view placed below the parent shows the part from above.
+
+    Args:
+        parent: name of the parent view (from list_views, e.g. "VIEW1").
+        x, y: view center on the sheet, mm.
+        style: from_base, visible, hidden, shaded, shaded_hidden.
+    """
+    return inv.add_projected_view(parent, x, y, style)
+
+
+@mcp.tool()
+def add_section_view(parent: str, x1: float, y1: float, x2: float, y2: float,
+                     x: float, y: float, label: str = "A", style: str = "from_base") -> str:
+    """Section view cut along the line (x1, y1)-(x2, y2) of the parent view, centered at (x, y).
+
+    Args:
+        parent: name of the parent view.
+        x1, y1, x2, y2: section line ends, model mm from the parent view center.
+                        Extend the line past the part outline.
+        x, y: section view center on the sheet, mm. It stays aligned with the parent.
+        label: section letter, e.g. "A" for A-A.
+        style: from_base, visible, hidden, shaded, shaded_hidden.
+    """
+    return inv.add_section_view(parent, x1, y1, x2, y2, x, y, label, style)
+
+
+@mcp.tool()
+def add_detail_view(parent: str, cx: float, cy: float, radius: float, x: float, y: float,
+                    scale: float = 2.0, label: str = "B", style: str = "from_base") -> str:
+    """Enlarged circular detail of part of a view, centered at (x, y) on the sheet.
+
+    Args:
+        parent: name of the parent view.
+        cx, cy: detail circle center, model mm from the parent view center.
+        radius: detail circle radius, model mm.
+        x, y: detail view center on the sheet, mm.
+        scale: detail scale, e.g. 2.0 for 2:1.
+        label: detail letter.
+    """
+    return inv.add_detail_view(parent, cx, cy, radius, x, y, scale, label, style)
+
+
+@mcp.tool()
+def retrieve_dimensions(view: str) -> str:
+    """Bring the model's sketch and feature dimensions into a view, arrange them, and
+    push overlapping texts apart. Reports any text overlaps that remain on the sheet."""
+    return inv.retrieve_dimensions(view)
+
+
+@mcp.tool()
+def add_centerlines(view: str) -> str:
+    """Automatic centerlines and center marks for holes, cylinders, revolved features
+    and circular patterns in a view."""
+    return inv.add_centerlines(view)
+
+
+@mcp.tool()
+def add_dimension(view: str, kind: str, x1: float, y1: float,
+                  x2: float | None = None, y2: float | None = None,
+                  text_x: float = 0, text_y: float = 0) -> str:
+    """Add one dimension to a view. Points are model mm from the view center; each picks
+    the nearest visible curve.
+
+    Args:
+        view: view name.
+        kind: diameter or radius (curve nearest x1, y1), or horizontal, vertical, aligned
+              (distance between the curves nearest x1, y1 and x2, y2).
+        x1, y1, x2, y2: points on or near the curves to dimension.
+        text_x, text_y: where the dimension text goes, same frame.
+    """
+    return inv.add_dimension(view, kind, x1, y1, x2, y2, text_x, text_y)
+
+
+@mcp.tool()
+def set_title_block(fields: str) -> str:
+    """Fill the title block through the drawing's iProperties and return what it shows.
+
+    Args:
+        fields: JSON object. Keys: title, subject, author, revision, company, part_number,
+                description, designer, checked_by, approved_by.
+                Example: {"title": "Flange", "part_number": "KF-001", "designer": "Rizal"}
+    """
+    return inv.set_title_block(json.loads(fields))
+
+
+@mcp.tool()
+def list_views() -> str:
+    """Views on the active sheet with scale, center and box (mm), plus layout problems:
+    views outside the border, overlapping views or title block, overlapping texts."""
+    return json.dumps(inv.list_views(), indent=1, ensure_ascii=False)
+
+
+@mcp.tool()
+def export_sheet_png(path: str, width: int = 2000) -> str:
+    """Save a picture of the whole active sheet. Open it to check the layout by eye.
+
+    Args:
+        path: output .png path.
+        width: image width in pixels; height follows the sheet's aspect ratio.
+    """
+    return inv.export_sheet_png(path, width)
+
+
+@mcp.tool()
+def export_pdf(path: str, all_sheets: bool = True, black_lines: bool = True) -> str:
+    """Export the active drawing to PDF.
+
+    Args:
+        path: output .pdf path.
+        all_sheets: False exports only the active sheet.
+        black_lines: print all colors as black.
+    """
+    return inv.export_pdf(path, all_sheets, black_lines)
+
+
 def main():
     mcp.run(transport="stdio")
 
