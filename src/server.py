@@ -737,12 +737,18 @@ def delete_dimension(indices: str) -> str:
 
 @mcp.tool()
 def set_title_block(fields: str) -> str:
-    """Fill the title block through the drawing's iProperties and return what it shows.
+    """Fill title block fields by the names the title block shows, and return what it shows.
+
+    Each field goes where the title block reads it: a prompt on the sheet, an iProperty of
+    the drawing, or an iProperty of the model in the first view (then the model changes
+    and save_document saves it too). MATERIAL sets the part's material from the active
+    material library. An unknown name lists the fields the title block has.
 
     Args:
-        fields: JSON object. Keys: title, subject, author, revision, company, part_number,
-                description, designer, checked_by, approved_by.
-                Example: {"title": "Flange", "part_number": "KF-001", "designer": "Rizal"}
+        fields: JSON object. Arjuna template: {"TITLE": "Flens Kopling", "PART NUMBER": "KF-001",
+                "ENGINEER": "Rizal", "CHECKED BY": "...", "REVISION NUMBER": "1",
+                "MATERIAL": "Aluminum 6061", "SURFACE FINISH": "Ra 3.2"}.
+                Underscores and lower case work too ("part_number").
     """
     return inv.set_title_block(json.loads(fields))
 

@@ -1,12 +1,13 @@
 {
-  "description": "Arjuna drawing settings until the team template arrives: Inventor's ISO template, third angle, mm, no sheet-zone references in view labels.",
-  "template": "builtin:Metric/ISO.idw",
-  "sheet_size": "A3",
+  "description": "Arjuna EV drawings: team A3 landscape template (migrated copy), third angle, mm, one decimal with comma and no trailing zeros as in the 2024 baseline drawings and the Arjuna dimension style.",
+  "template": "references/templates/2027/Template Landscape Arjuna FIX A3.idw",
+  "sheet_size": "",
   "projection": "third",
   "units": "mm",
   "decimal_marker": "comma",
-  "dimension_precision": 2,
+  "dimension_precision": 1,
   "trailing_zeros": false,
+  "centerline_overshoot_mm": 3,
   "labels": {
     "section_view": "<DrawingViewName/>-<DrawingViewName/> ( <DrawingViewScale/> )",
     "detail_view": "<DrawingViewName/> ( <DrawingViewScale/> )",

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import win32com.client
 import pythoncom
 
@@ -213,9 +214,21 @@ class InventorConnection:
                         f"{path} is open in Inventor as '{other.DisplayName}'. Close it first "
                         "or save under another name.")
             doc.SaveAs(path, False)
-            return f"Saved as: {path}"
+            return f"Saved as: {path}" + self._save_dirty_references(doc)
         doc.Save()
-        return f"Saved: {doc.FullFileName}"
+        return f"Saved: {doc.FullFileName}" + self._save_dirty_references(doc)
+
+    @staticmethod
+    def _save_dirty_references(doc) -> str:
+        """Save models a drawing changed, e.g. iProperties written by set_title_block."""
+        saved = []
+        refs = doc.ReferencedDocuments
+        for i in range(1, refs.Count + 1):
+            ref = refs.Item(i)
+            if ref.Dirty and ref.FullFileName:
+                ref.Save()
+                saved.append(os.path.basename(ref.FullFileName))
+        return f" (also saved {', '.join(saved)})" if saved else ""
 
     # Translator add-ins by ClassId; display names changed in 2027 ("Translator: STEP").
     _TRANSLATORS = {
@@ -1344,19 +1357,6 @@ class InventorConnection:
     }
     _VIEW_STYLES = {"hidden": 32257, "visible": 32258, "shaded": 32259,
                     "from_base": 32260, "shaded_hidden": 32261}
-    _TITLE_FIELDS = {
-        "title": ("Summary Information", "Title"),
-        "subject": ("Summary Information", "Subject"),
-        "author": ("Summary Information", "Author"),
-        "revision": ("Summary Information", "Revision Number"),
-        "company": ("Document Summary Information", "Company"),
-        "part_number": ("Design Tracking Properties", "Part Number"),
-        "description": ("Design Tracking Properties", "Description"),
-        "designer": ("Design Tracking Properties", "Designer"),
-        "checked_by": ("Design Tracking Properties", "Checked By"),
-        "approved_by": ("Design Tracking Properties", "Engr Approved By"),
-    }
-
     def active_drawing(self):
         doc = self.active_document()
         if doc.DocumentType != 12292:  # kDrawingDocumentObject
@@ -1684,6 +1684,8 @@ class InventorConnection:
             except Exception:
                 pass  # Arrange rejects some dimension mixes; _untangle still runs
         obstacles = [box for _, box in self._annotation_boxes(sheet)]
+        for d in new:
+            self._tag_view(d, v.Name)
         moved = self._untangle(new, v, obstacles)
         clashes = self._clashes(self._text_boxes(sheet))
         values = ", ".join(d.Text.Text for d in new)
@@ -1691,7 +1693,9 @@ class InventorConnection:
                 f"{moved} text move(s) to clear overlaps; remaining text overlaps: {clashes or 'none'}")
 
     def add_centerlines(self, view: str) -> str:
-        sheet = self.active_drawing().ActiveSheet
+        """Automated centerlines and center marks, then every cylinder axis drawn full length."""
+        doc = self.active_drawing()
+        sheet = doc.ActiveSheet
         v = self._view(view)
         lines, marks = sheet.Centerlines.Count, sheet.Centermarks.Count
         settings = v.GetAutomatedCenterlineSettings()
@@ -1699,8 +1703,94 @@ class InventorConnection:
                      "ApplyToRevolutions", "ProjectionNormalAxis", "ProjectionParallelAxis"):
             setattr(settings, flag, True)
         v.SetAutomatedCenterlineSettings(settings)
-        return (f"Automated centerlines on {v.Name}: +{sheet.Centerlines.Count - lines} centerline(s), "
-                f"+{sheet.Centermarks.Count - marks} centermark(s)")
+        overshoot = float(self._profile_of(doc).get("centerline_overshoot_mm", 3))
+        extended, added = self._complete_axes(sheet, v, overshoot)
+        return (f"Centerlines on {v.Name}: +{sheet.Centerlines.Count - lines} centerline(s), "
+                f"+{sheet.Centermarks.Count - marks} centermark(s); {extended} axis line(s) "
+                f"stretched and {added} added to span their cylinders + {overshoot:g} mm")
+
+    def _complete_axes(self, sheet, view, overshoot_mm: float):
+        """Make one centerline per cylinder or cone axis lying in the view plane, spanning
+        every silhouette of that axis plus the overshoot. Automated centerlines often stop
+        at one feature (e.g. only the hub of a flange)."""
+        tg = self._tg()
+        groups = []  # {"o": (x, y), "d": (dx, dy), "points": [...], "curves": [...]}, sheet cm
+        curves = view.DrawingCurves
+        for i in range(1, curves.Count + 1):
+            curve = curves.Item(i)
+            try:
+                face = curve.ModelGeometry
+                if face.SurfaceType not in (5891, 5893):  # cylinder, cone
+                    continue
+                g = face.Geometry
+                base, axis = g.BasePoint, g.AxisVector
+            except Exception:
+                continue
+            p0 = view.ModelToSheetSpace(base)
+            p1 = view.ModelToSheetSpace(tg.CreatePoint(base.X + axis.X, base.Y + axis.Y, base.Z + axis.Z))
+            dx, dy = p1.X - p0.X, p1.Y - p0.Y
+            n = (dx * dx + dy * dy) ** 0.5
+            if n < 1e-6:
+                continue  # axis points at the viewer; center marks cover it
+            d = (dx / n, dy / n)
+            group = next((gr for gr in groups
+                          if abs(gr["d"][0] * d[1] - gr["d"][1] * d[0]) < 1e-3
+                          and abs((p0.X - gr["o"][0]) * gr["d"][1] - (p0.Y - gr["o"][1]) * gr["d"][0]) < 0.01),
+                         None)
+            if group is None:
+                group = {"o": (p0.X, p0.Y), "d": d, "points": [], "curves": []}
+                groups.append(group)
+            segments = curve.Segments
+            for j in range(1, segments.Count + 1):
+                seg = segments.Item(j)
+                group["points"] += [(seg.StartPoint.X, seg.StartPoint.Y), (seg.EndPoint.X, seg.EndPoint.Y)]
+            group["curves"].append(curve)
+
+        extended = added = 0
+        ext = overshoot_mm / 10.0
+        for gr in groups:
+            (ox, oy), (dx, dy) = gr["o"], gr["d"]
+            ts = [(x - ox) * dx + (y - oy) * dy for x, y in gr["points"]]
+            start = tg.CreatePoint2d(ox + dx * (min(ts) - ext), oy + dy * (min(ts) - ext))
+            end = tg.CreatePoint2d(ox + dx * (max(ts) + ext), oy + dy * (max(ts) + ext))
+            line = self._collinear_centerline(sheet, gr["o"], gr["d"])
+            if line is None:
+                sides = {}
+                for c in gr["curves"]:
+                    m = c.MidPoint
+                    side = (m.X - ox) * dy - (m.Y - oy) * dx
+                    if abs(side) > 1e-4:
+                        sides.setdefault(side > 0, c)
+                if len(sides) < 2:
+                    continue  # only one silhouette visible, nothing to bisect
+                line = sheet.Centerlines.AddBisector(sheet.CreateGeometryIntent(sides[True]),
+                                                      sheet.CreateGeometryIntent(sides[False]))
+                added += 1
+            else:
+                extended += 1
+            # An end that would make the line run backwards is silently ignored, so keep its direction.
+            a, b = line.StartPoint, line.EndPoint
+            if (b.X - a.X) * dx + (b.Y - a.Y) * dy < 0:
+                start, end = end, start
+            line.StartPoint, line.EndPoint = start, end
+        return extended, added
+
+    @staticmethod
+    def _collinear_centerline(sheet, origin, direction):
+        lines = sheet.Centerlines
+        ox, oy = origin
+        dx, dy = direction
+        for i in range(1, lines.Count + 1):
+            line = lines.Item(i)
+            try:
+                if hasattr(line.Geometry, "Radius"):
+                    continue
+                a, b = line.StartPoint, line.EndPoint
+            except Exception:
+                continue
+            if all(abs((p.X - ox) * dy - (p.Y - oy) * dx) < 0.01 for p in (a, b)):
+                return line
+        return None
 
     def _nearest_curve(self, view, x: float, y: float, circular: bool = False):
         """Drawing curve of a view closest to a point given in model mm from the view center."""
@@ -1757,6 +1847,7 @@ class InventorConnection:
             dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1), sheet.CreateGeometryIntent(c2), dim_type)
         else:
             raise ValueError("kind must be diameter, radius, pcd, horizontal, vertical or aligned")
+        self._tag_view(dim, v.Name)
         clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"dimension {dim.Text.Text}" in c]
         picked = "curves" if kind in ("horizontal", "vertical", "aligned") else "curve"
         return (f"{kind.capitalize()} dimension {dim.Text.Text} in {v.Name} "
@@ -1801,7 +1892,8 @@ class InventorConnection:
                 f"text overlaps: {clashes or 'none'}")
 
     def list_dimensions(self) -> list[dict]:
-        """Dimensions on the active sheet with their text, text center (mm) and nearest view."""
+        """Dimensions on the active sheet with text, text center (mm) and view. The view is the
+        one the dimension was made in by these tools, otherwise the view nearest its text."""
         sheet = self.active_drawing().ActiveSheet
         rects = {}
         for i in range(1, sheet.DrawingViews.Count + 1):
@@ -1816,11 +1908,32 @@ class InventorConnection:
         out = []
         dims = sheet.DrawingDimensions.GeneralDimensions
         for i in range(1, dims.Count + 1):
-            r = self._rect(dims.Item(i).Text)
+            d = dims.Item(i)
+            r = self._rect(d.Text)
             x, y = (r[0] + r[2]) / 2, (r[1] + r[3]) / 2
-            out.append({"index": i, "text": dims.Item(i).Text.Text,
-                        "text_mm": [round(x, 1), round(y, 1)], "view": nearest_view(x, y)})
+            out.append({"index": i, "text": d.Text.Text, "text_mm": [round(x, 1), round(y, 1)],
+                        "view": self._tagged_view(d) or nearest_view(x, y)})
         return out
+
+    _TAG_SET = "inventor_mcp"
+
+    def _tag_view(self, dimension, view_name: str) -> None:
+        """Remember which view a dimension belongs to; its text may later move near another view."""
+        sets = dimension.AttributeSets
+        attrs = sets.Item(self._TAG_SET) if sets.NameIsUsed(self._TAG_SET) else sets.Add(self._TAG_SET)
+        if attrs.NameIsUsed("view"):
+            attrs.Item("view").Value = view_name
+        else:
+            attrs.Add("view", 14595, view_name)  # kStringType
+
+    def _tagged_view(self, dimension):
+        try:
+            sets = dimension.AttributeSets
+            if sets.NameIsUsed(self._TAG_SET):
+                return sets.Item(self._TAG_SET).Item("view").Value
+        except Exception:
+            pass
+        return None
 
     def delete_dimension(self, indices: list[int]) -> str:
         """Delete dimensions by the index list_dimensions reports."""
@@ -1835,29 +1948,84 @@ class InventorConnection:
             dims.Item(i).Delete()
         return f"Deleted {len(removed)} dimension(s): {', '.join(reversed(removed))}"
 
-    def set_title_block(self, fields: dict) -> str:
-        """Write iProperties of the drawing and return what the title block now shows."""
-        doc = self.active_drawing()
-        unknown = [k for k in fields if k.lower() not in self._TITLE_FIELDS]
-        if unknown:
-            raise ValueError(f"Unknown title block field(s) {unknown}. Use {', '.join(self._TITLE_FIELDS)}.")
-        props = doc.PropertySets
-        for key, value in fields.items():
-            set_name, prop = self._TITLE_FIELDS[key.lower()]
-            props.Item(set_name).Item(prop).Value = str(value)
-        # The ISO title block prints the author under "Designed by".
-        if "designer" in fields and "author" not in fields:
-            props.Item("Summary Information").Item("Author").Value = str(fields["designer"])
-        tb = doc.ActiveSheet.TitleBlock
+    def _title_block_fields(self, sheet) -> dict:
+        """{FIELD: (text box, source)} for the fillable fields of the sheet's title block.
+
+        source is "prompt", or the attributes of the <Property> tag (Document, FormatID,
+        PropertyID). Computed fields such as sheet number or scale are left out.
+        """
+        tb = sheet.TitleBlock
         if tb is None:
-            return "iProperties set; the sheet has no title block"
-        shown = {}
+            return {}
+        fields = {}
         boxes = tb.Definition.Sketch.TextBoxes
         for i in range(1, boxes.Count + 1):
             t = boxes.Item(i)
-            if t.Text.startswith("<") and t.Text.count("<") == 1:
-                shown[t.Text.strip("<> ").lower()] = tb.GetResultText(t)
-        return json.dumps(shown, ensure_ascii=False)
+            name = t.Text.strip().strip("<>").strip().upper()
+            tag = re.search(r"<Property ([^>]*)>", t.FormattedText)
+            if tag:
+                fields[name] = (t, dict(re.findall(r"(\w+)='([^']*)'", tag.group(1))))
+            elif "<Prompt" in t.FormattedText:
+                fields[name] = (t, "prompt")
+        return fields
+
+    def _set_material(self, model, name: str) -> None:
+        if model.DocumentType != 12290:
+            raise ValueError("MATERIAL can only be set on a part")
+        lib = self.app.ActiveMaterialLibrary.MaterialAssets
+        names = [lib.Item(i).DisplayName for i in range(1, lib.Count + 1)]
+        match = next((n for n in names if n.lower() == name.lower()), None)
+        if match is None:
+            close = [n for n in names if name.lower().split()[0] in n.lower()][:8]
+            raise ValueError(f"No material {name!r} in the active library. Close: {close}")
+        assets = model.MaterialAssets
+        local = next((assets.Item(i) for i in range(1, assets.Count + 1)
+                      if assets.Item(i).DisplayName == match), None)
+        model.ActiveMaterial = local or lib.Item(match).CopyTo(model)
+
+    def set_title_block(self, fields: dict) -> str:
+        """Fill title block fields by the names the title block shows, e.g. TITLE, PART NUMBER.
+
+        Each field is written where the title block reads it: a prompt on the sheet, an
+        iProperty of the drawing, or an iProperty of the model in the first view
+        (MATERIAL sets the part's material). Returns what the title block now shows.
+        """
+        doc = self.active_drawing()
+        sheet = doc.ActiveSheet
+        available = self._title_block_fields(sheet)
+        if not available:
+            raise ValueError("The active sheet has no title block with fillable fields")
+        wanted = {k.replace("_", " ").strip().upper(): str(v) for k, v in fields.items()}
+        unknown = [k for k in wanted if k not in available]
+        if unknown:
+            raise ValueError(f"Title block has no field {unknown}. Fields: {sorted(available)}")
+        model = None
+        if sheet.DrawingViews.Count:
+            model = sheet.DrawingViews.Item(1).ReferencedDocumentDescriptor.ReferencedDocument
+        changed_model = []
+        for name, value in wanted.items():
+            box, source = available[name]
+            if source == "prompt":
+                sheet.TitleBlock.SetPromptResultText(box, value)
+                continue
+            target = doc
+            if source.get("Document") == "model":
+                if model is None:
+                    raise ValueError(f"{name} is read from the model; place a view first")
+                target = model
+                changed_model.append(name)
+            if source.get("Property") == "Material" and target is model:
+                self._set_material(model, value)
+            else:
+                target.PropertySets.Item(source["FormatID"]).ItemByPropId(
+                    int(source["PropertyID"])).Value = value
+        doc.Update()
+        shown = {n: sheet.TitleBlock.GetResultText(box) for n, (box, _) in available.items()}
+        result = {"title_block": shown}
+        if changed_model:
+            result["model_changed"] = {"file": model.DisplayName, "fields": changed_model,
+                                       "note": "save_document on the drawing saves the model too"}
+        return json.dumps(result, ensure_ascii=False)
 
     def list_views(self) -> dict:
         sheet = self.active_drawing().ActiveSheet

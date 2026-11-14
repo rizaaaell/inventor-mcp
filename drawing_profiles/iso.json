@@ -1,0 +1,19 @@
+{
+  "description": "Inventor's own ISO template with the Arjuna settings, for machines without the team template.",
+  "template": "builtin:Metric/ISO.idw",
+  "sheet_size": "A3",
+  "projection": "third",
+  "units": "mm",
+  "decimal_marker": "comma",
+  "dimension_precision": 1,
+  "trailing_zeros": false,
+  "centerline_overshoot_mm": 3,
+  "labels": {
+    "section_view": "<DrawingViewName/>-<DrawingViewName/> ( <DrawingViewScale/> )",
+    "detail_view": "<DrawingViewName/> ( <DrawingViewScale/> )",
+    "auxiliary_view": "<DrawingViewName/> ( <DrawingViewScale/> )",
+    "section_line": "<DrawingViewName/>",
+    "detail_fence": "<DrawingViewName/>"
+  },
+  "hole_note_quantity": "<Quantity/>x "
+}
