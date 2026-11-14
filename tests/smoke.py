@@ -135,6 +135,13 @@ def drawing_case(inv):
             inv.add_centerlines(v)
             inv.retrieve_dimensions(v)
         layout = inv.list_views()
+        sheet = drawing.ActiveSheet
+        axis_lengths = []
+        for i in range(1, sheet.Centerlines.Count + 1):
+            line = sheet.Centerlines.Item(i)
+            if not hasattr(line.Geometry, "Radius"):
+                a, b = line.StartPoint, line.EndPoint
+                axis_lengths.append(((a.X - b.X) ** 2 + (a.Y - b.Y) ** 2) ** 0.5 * 10)
         texts = [d["text"] for d in inv.list_dimensions()]
         inv.export_pdf(str(pdf))
     finally:
@@ -144,6 +151,8 @@ def drawing_case(inv):
     assert layout["dimensions"] == 8, f"{layout['dimensions']} dimensions, expected 8"
     assert not any(",00" in t for t in texts), f"trailing zeros despite the profile: {texts}"
     assert not layout["problems"], layout["problems"]
+    # The flange is 50 long; its axis must span it plus the profile's 3 mm overshoot each end.
+    assert max(axis_lengths) >= 55.5, f"longest axis {max(axis_lengths):.1f} mm, expected 56"
     box = re.search(rb"/MediaBox\s*\[0 0 (\d+) (\d+)\]", pdf.read_bytes())
     assert box and (int(box.group(1)), int(box.group(2))) == (1191, 842), "PDF is not one A3 landscape page"
     return f"3 views, 8 dimensions, no layout problems, A3 PDF {pdf.stat().st_size} bytes"

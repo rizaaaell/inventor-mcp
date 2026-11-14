@@ -492,6 +492,12 @@ def sheet_metal():
 def drawing():
     """All drawing tools on an A3 sheet of the solid block saved by solid_block()."""
     model = str(OUT / "audit_solid.ipt")
+    def iso_profile():
+        out = srv.create_drawing("iso")
+        close_active()
+        return out
+    check("create_drawing with the iso profile", iso_profile)
+
     def create():
         out = srv.create_drawing()
         std = srv.inv.active_drawing().StylesManager.ActiveStandardStyle
@@ -575,9 +581,13 @@ def drawing():
     check("add_dimension horizontal", linear)
 
     def title():
-        out = json.loads(srv.set_title_block(json.dumps({"title": "Audit block", "part_number": "AUD-1"})))
-        assert out["title"] == "Audit block" and out["part number"] == "AUD-1", out
-        return out
+        out = json.loads(srv.set_title_block(json.dumps({
+            "title": "Audit block", "part_number": "AUD-1", "MATERIAL": "Aluminum 6061"})))
+        shown = out["title_block"]
+        assert shown["TITLE"] == "Audit block" and shown["PART NUMBER"] == "AUD-1", shown
+        assert shown["MATERIAL"] == "Aluminum 6061", shown
+        assert "TITLE" in out["model_changed"]["fields"], out
+        return shown
     check("set_title_block", title)
 
     def title_unknown():
