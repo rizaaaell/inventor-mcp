@@ -165,6 +165,28 @@ The translators report `Activated = False` until used; call `Activate()` first.
   ("Ø11,00 THRU"). The pattern count is not shown by default: prefix
   `FormattedHoleThreadNote` with `<QuantityNote/>`; `FormattedQuantityNote`
   (`<Quantity/>x`) sets its text.
+- A title block field shows either a `<Prompt>` (fill with
+  `TitleBlock.SetPromptResultText(textBox, value)`) or a `<Property Document='model'|'drawing'
+  PropertySet=... Property=... FormatID=... PropertyID=...>` tag. The Arjuna template
+  reads TITLE, REVISION NUMBER, CREATION DATE, ENGINEER, CHECKED BY and MATERIAL from the
+  model, PART NUMBER and SURFACE FINISH are prompts. `PropertySets.Item(FormatID)` and
+  `ItemByPropId(id)` find the property in the right document.
+- The Material iProperty is read-only (`E_FAIL`). Set the part's
+  `ActiveMaterial` to an asset of `MaterialAssets`, copying it from
+  `Application.ActiveMaterialLibrary.MaterialAssets` with `CopyTo(part)` first.
+- Saving a drawing with `SaveAs` also saved the model whose iProperties had changed.
+- Setting `Centerline.StartPoint` / `EndPoint` so the line would run the other way is
+  ignored without an error. Keep the line's direction; then the new ends hold through
+  `Update` and save.
+- Automated centerlines often cover one feature only: the flange's axis stopped at the
+  hub in the section and at the disk in the side view. A drawing curve's
+  `ModelGeometry` is the cylindrical or conical face (`Geometry.BasePoint`,
+  `AxisVector`), and `DrawingView.ModelToSheetSpace` projects the axis onto the sheet.
+- `AttributeSets.Add(name)` / `AttributeSet.Add(name, 14595, value)` tag a dimension
+  with its view; a retrieved dimension's `Intent.Geometry` is `None`, so the view
+  cannot be read back from the dimension itself.
+- `.styxml` style exports have no import call in the API (no `Import` on the styles
+  managers); import them through the Style and Standard Editor.
 - Automated centerlines include the bolt circle of a circular pattern. A circular
   `Centerline` has `Geometry.Center` / `Radius` in sheet cm, and
   `GeneralDimensions.AddDiameter(textPos, sheet.CreateGeometryIntent(centerline))`
