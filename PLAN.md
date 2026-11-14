@@ -165,6 +165,7 @@ Diisi oleh sesi Claude Code setiap akhir fase. Entri terbaru di bawah.
 |-|-|-|-|
 |2026-11-13|0|Selesai|smoke.py 2/2 PASS (silinder 19 635,0 mm³; flens 267 697,2 mm³). Commit a096a41 di origin/main; `.mcp.json` dan `.claude/` diabaikan git. Run pertama smoke.py menggantung: tidak ada Inventor yang berjalan, `connect()` menyalakan instance baru yang tidak merespons. Lulus setelah Inventor dibuka manual.|
 |2026-11-14|1|Selesai|tests/audit_tools.py: 57 PASS, 0 FAIL (semua 36 tool). smoke.py 6/6 PASS. Diperbaiki: export_document (nama translator berubah di 2027, sekarang lewat ClassId), dialog Style Conflict yang menahan create_part (SilentOperation), list_edges/find_edge untuk lingkaran penuh, tabel SurfaceTypeEnum, stderr execute_python. Enum lain cocok dengan RxInventor.tlb 2027. Detail di docs/inventor-2027-notes.md.|
+|2026-11-14|2|Menunggu konfirmasi|12 tool drawing baru. Uji penerimaan: experiments/drawing_flange.py membuat Flens_A3.idw + PDF A3 1 halaman (front, top, section A-A lewat dua lubang baut, 8 dimensi hasil retrieve, centerline, title block terisi); list_views tanpa masalah tata letak, diperiksa juga lewat PNG. Audit 77 PASS, smoke 7/7 PASS. Template drawing: ISO.idw bawaan Inventor 2027, karena template tim perlu dimigrasi. Tunggu Rizal mengonfirmasi tampilan PDF.|
 
 
 

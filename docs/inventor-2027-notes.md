@@ -57,6 +57,10 @@ Other values confirmed in the library:
   extra unnamed `PartN` document open more than once.
 - `connect()` starts a new Inventor when none is running. That instance once sat at
   "Not Responding" for over five minutes; most likely a startup dialog waiting.
+- A template saved by an older Inventor release opens a modal "needs to be migrated"
+  dialog even with `SilentOperation` on, and `Documents.Add` then fails with
+  `E_INVALIDARG`. Every `.idw` in the project's Templates folder does this. Open and
+  save such a template once in 2027 before using it.
 
 ## Translators
 
@@ -71,7 +75,7 @@ Display names changed in 2027 to `Translator: STEP`, `Translator: IGES`,
 | IGES | `{90AF7F44-0C01-11D5-8E83-0010B541CD80}` |
 | SAT | `{89162634-02B6-11D5-8E80-0010B541CD80}` |
 | STL | `{533E9A98-FC3B-11D4-8E7E-0010B541CD80}` |
-| PDF | `{0AC6FD96-2F4D-42CE-8BE0-8AEA580399E4}` (for phase 2) |
+| PDF | `{0AC6FD96-2F4D-42CE-8BE0-8AEA580399E4}` |
 | DWG / DXF | `{C24E3AC2-122E-11D5-8E91-0010B541CD80}` / `{C24E3AC4-...}` |
 
 The translators report `Activated = False` until used; call `Activate()` first.
@@ -107,6 +111,50 @@ The translators report `Activated = False` until used; call `Activate()` first.
   feature connects the pieces. An extrude with operation `new` makes a second body,
   and later cuts and `inspect` only see body 1.
 - Sketches on the XZ plane are mirrored (sketch X is world -X).
+
+## Drawings
+
+- Template: `C:\Users\Public\Documents\Autodesk\Inventor 2027\Templates\en-US\Metric\ISO.idw`
+  gives A3 landscape, `Default Standard (ISO)`, first angle projection. Its border
+  spans x 10–410, y 10–287 mm and its title block x 240–410, y 10–40 mm.
+- Sheet coordinates are cm from the bottom-left corner. `DrawingView.Left`, `Top`,
+  `Width`, `Height` give the view box; `Top` is the upper edge.
+- `kFrontViewOrientation` (10764) looks along the part's -Z axis, so a flange modeled
+  on XY shows its circular face in the front view.
+- A deleted view keeps its name in use: after a rejected `VIEW1` the next view is
+  `VIEW2`. Read view names from tool results instead of guessing.
+- `AddSectionView` needs a `DrawingSketch` on the parent view:
+  `view.Sketches.Add()`, `Edit()`, a line between `SheetToSketchSpace` points, `ExitEdit()`.
+- `AddDetailView(parent, position, style, True, fenceCenter, fenceRadius_cm, None, scale, True, label)`
+  for a circular fence; the fence center and radius are in sheet space.
+- `GeneralDimensions.GetRetrievableDimensions(view)` then `Retrieve(view, collection)`;
+  the new dimensions are appended at the end of `GeneralDimensions`. A section view
+  of the flange had none to retrieve.
+- `DrawingDimensions.Arrange(ObjectCollection)` spaces linear dimensions but leaves
+  diameter dimensions in place. `retrieve_dimensions` pushes overlapping texts apart
+  itself, using `DimensionText.RangeBox`; view labels have a `RangeBox` as well.
+- The "A / .A6" labels at the section line ends and the label above a detail circle
+  expose no extent. The wrapper estimates boxes from `SectionLineSketch` line ends
+  and `FenceCenter` / `FenceRadius`, and keeps dimension texts off them.
+- `view.DrawingCurves` is a property. Calling it, `view.DrawingCurves()`, fails with
+  "Invalid number of parameters".
+- Drawing curve segments carry 2D geometry in sheet cm: circles and arcs have `Center`
+  and `Radius`, lines `StartPoint` and `EndPoint`.
+- `GetAutomatedCenterlineSettings()` returns the settings object (the out parameter
+  becomes the result); set the `ApplyTo...` flags and pass it back.
+- The ISO title block reads the drawing's iProperties: `<TITLE>`, `<PART NUMBER>`,
+  `<COMPANY>`, `<AUTHOR>` (printed under "Designed by"), `<CHECKED BY>`,
+  `<ENG APPROVED BY>`, `<REVISION NUMBER>`. It has no description or material field.
+  `TitleBlock.GetResultText(textBox)` returns what is printed.
+- `NameValueMap.Value(name) = x` has no syntax under late binding; the wrapper puts
+  it through `Invoke` with `DISPATCH_PROPERTYPUT`.
+- PDF options: `Sheet_Range` 14082 all sheets, 14081 active sheet (the default);
+  `All_Color_AS_Black`; `Vector_Resolution`. An A3 sheet comes out as one page with
+  `MediaBox` 1191 x 842 pt.
+- `ActiveView.Fit()` then `SaveAsBitmap(path, w, h)` captures the whole sheet.
+- The ISO view labels add sheet name and zone, e.g. `A-A ( 1 : 1 ) / .C5`; with an
+  unnamed sheet that leaves a bare "/ .C5". Dimensions print two decimals with a comma
+  (`Ø120,00`) from the ISO dimension style.
 
 ## Assembly API
 
