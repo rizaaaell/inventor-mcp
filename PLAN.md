@@ -125,8 +125,8 @@ Tujuan: assembly dibangun lewat tool, bukan kode mentah.
 |`analyze\_interference()`|Interferensi antar komponen + volume|`AnalyzeInterference`|
 |`pattern\_component(occ, ...)`|Pola komponen (mis. baut ×4)||
 
-* \[ ] Ambil logika dari `experiments/assembly\_coupling.py` sebagai dasar.
-* \[ ] Simpan urutan constraint yang dibuat ke file log di samping `.iam` (untuk draf diagram alur perakitan nanti).
+* \[x] Ambil logika dari `experiments/assembly\_coupling.py` sebagai dasar.
+* \[x] Simpan urutan constraint yang dibuat ke file log di samping `.iam` (untuk draf diagram alur perakitan nanti).
 
 Uji penerimaan: bangun ulang kopling flens hanya dengan tool fase ini, tanpa `execute\_python`. BOM benar (2 flens, 2 poros, 4 baut, 4 mur, 8 ring), DOF semua komponen 0, interferensi hanya baut-mur di lubang tap (artefak pemodelan ulir, harus dilaporkan sebagai artefak).
 
@@ -174,6 +174,4 @@ Diisi oleh sesi Claude Code setiap akhir fase. Entri terbaru di bawah.
 |2026-11-14|2|Menunggu konfirmasi|Revisi keenam: garis sumbu dan lingkaran PCD jadi titik-strip (layer centerline ISO menggambar lingkaran sebagai strip biasa yang mirip hidden line); PCD masuk ke hole note '4x Ø11 THRU / EQ SP ON PCD Ø90' dengan frame position di bawahnya; chamfer jadi catatan '2x 1 X 45°' (tool add_chamfer_note). Audit 87 PASS, smoke 7/7.|
 |2026-11-14|2|Menunggu konfirmasi|Revisi ketujuh: center mark setiap lubang dan lingkaran utama diperpanjang melewati tepi lingkaran (center mark pola otomatis yang terkunci diganti center mark biasa); top view mendapat sumbu lubang tersembunyi. Audit 87 PASS, smoke 7/7.|
 |2026-11-14|2|Selesai|Rizal mengonfirmasi tampilan Flens_A3.pdf. Fase 2 ditutup dengan 21 tool drawing (57 total), profil drawing Arjuna, template Arjuna A3 hasil migrasi dengan style Arjuna Fix, audit 87 PASS, smoke 7/7. Sisa: style .styxml belum diimpor ke template A4/A2/portrait; teks Ra 1,6 sedikit menimpa arsiran.|
-
-
-
+|2026-11-14|3|Menunggu konfirmasi|9 tool assembly baru (66 total): create_assembly, place_component, list_occurrences, list_occurrence_geometry, add_constraint (mate/flush/insert/angle/tangent), get_dof, get_bom, analyze_interference, pattern_component. Pencarian geometri lewat selector di koordinat part (plane:/axis:/circle:/face:/cylinder:/edge:), bukan tool find_occurrence_* terpisah. Uji penerimaan experiments/assembly_coupling_tools.py: Kopling_Flens_tools.iam, 20 komponen, 38 constraint, BOM 2/2/4/4/8, DOF semua 0, interferensi hanya 4 pasang baut-mur 187,51 mm³ ditandai artefak ulir; urutan constraint di Kopling_Flens_tools.constraints.json. Audit 101 PASS, smoke 8/8.|

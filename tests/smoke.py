@@ -193,6 +193,49 @@ def pinned_document_case(inv):
         first.Close(True)
 
 
+def assembly_case(inv):
+    """Pin inserted into a holed disk: fully constrained, BOM counts, no interference."""
+    out = Path(r"C:\inventor-test\smoke")
+    out.mkdir(parents=True, exist_ok=True)
+    for doc in list(inv.app.Documents):
+        if doc.FullFileName and Path(doc.FullFileName).parent == out:
+            doc.Close(True)
+    parts = {}
+    for name, sizes in (("smoke_disk", ((60, 10), (10, -10))), ("smoke_pin", ((10, 30),))):
+        inv.create_part(name=name)
+        for diameter, depth in sizes:
+            inv.create_sketch("XY")
+            inv.draw_circle(0, 0, diameter)
+            inv.extrude(abs(depth), "positive", "cut" if depth < 0 else "join")
+        parts[name] = str(out / f"{name}.ipt")
+        inv.save_document(parts[name])
+        inv.active_document().Close(True)
+
+    inv.create_assembly()
+    assembly = inv.active_document()
+    try:
+        inv.place_component(parts["smoke_disk"], grounded=True)
+        for x in (40, -40):
+            inv.place_component(parts["smoke_pin"], x, 0, 20)
+        inv.add_constraint("insert", "smoke_disk:1", "circle:0,0,10,5", "smoke_pin:1", "circle:0,0,0,5")
+        inv.add_constraint("angle", "smoke_disk:1", "plane:XZ", "smoke_pin:1", "plane:XZ", angle=45)
+        inv.add_constraint("insert", "smoke_disk:1", "circle:0,0,0,5", "smoke_pin:2", "circle:0,0,30,5")
+        inv.add_constraint("flush", "smoke_disk:1", "plane:XZ", "smoke_pin:2", "plane:XZ")
+        dof = inv.get_dof()
+        assert dof["fully_constrained"], dof
+        bom = {r["file"]: r["quantity"] for r in inv.get_bom("parts")}
+        assert bom == {"smoke_disk.ipt": 1, "smoke_pin.ipt": 2}, bom
+        clashes = inv.analyze_interference()
+        assert not clashes, clashes
+        return f"3 components, DOF 0, BOM {bom}"
+    finally:
+        assembly.Close(True)
+        for path in parts.values():
+            for doc in list(inv.app.Documents):
+                if doc.FullFileName.lower() == path.lower():
+                    doc.Close(True)
+
+
 CASES = [
     ("cylinder_d50x10", volume_case(build_cylinder)),
     ("coupling_flange", volume_case(build_flange)),
@@ -201,6 +244,7 @@ CASES = [
     ("sheet_metal_flange", sheet_metal_case),
     ("flange_drawing", drawing_case),
     ("pinned_document", pinned_document_case),
+    ("pin_assembly", assembly_case),
 ]
 
 

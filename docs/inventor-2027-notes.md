@@ -258,6 +258,27 @@ The translators report `Activated = False` until used; call `Activate()` first.
 - `Occurrences.Add` fails with `E_INVALIDARG (-2147024809)` when the file does not
   exist on disk, which includes a part that was built but never saved.
 
+Verified while building the phase 3 tools (2027.1):
+
+- Picking geometry on `occurrence.Definition` (part space) and wrapping it with
+  `CreateGeometryProxy` works the same for edges, faces and work features, so one
+  selector code path covers them all. `Face.GetClosestPointTo(Point)` and
+  `Edge.GetClosestPointTo(Point)` work on the native objects.
+- `AddTangentConstraint(face1, face2, InsideTangency, offset)` between two cylinders
+  puts them side by side with `InsideTangency=False`.
+- `AddAngleConstraint(plane1, plane2, radians)` takes no solution type argument and
+  came out healthy between two origin planes.
+- `OccurrencePatterns.AddCircularPattern(ParentComponents, AxisEntity, Natural,
+  AngleOffset, Count)`: AngleOffset is the step between instances in radians, Count
+  includes the original. The new instances show up in `Occurrences` as `Name:n` and
+  count in the BOM like placed components.
+- BOM views exist only after `BOM.StructuredViewEnabled` / `PartsOnlyViewEnabled` is
+  set to True; `BOMViews` names them "Structured" and "Parts Only". A row's document is
+  `row.ComponentDefinitions.Item(1).Document`.
+- `AnalyzeInterference` leaves out parts that only touch (tangent pins, mated faces).
+  A DIN 933 bolt in a DIN 934 nut whose tapped hole is cut at the minor diameter
+  overlaps by 187.51 mm³ per pair.
+
 ## Wrapper fixes in phase 1
 
 - **Tools followed the active tab.** Activating another document between two calls

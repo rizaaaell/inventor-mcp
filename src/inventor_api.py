@@ -214,9 +214,9 @@ class InventorConnection:
                         f"{path} is open in Inventor as '{other.DisplayName}'. Close it first "
                         "or save under another name.")
             doc.SaveAs(path, False)
-            return f"Saved as: {path}" + self._save_dirty_references(doc)
+            return f"Saved as: {path}" + self._save_dirty_references(doc) + self._write_constraint_log(doc)
         doc.Save()
-        return f"Saved: {doc.FullFileName}" + self._save_dirty_references(doc)
+        return f"Saved: {doc.FullFileName}" + self._save_dirty_references(doc) + self._write_constraint_log(doc)
 
     @staticmethod
     def _save_dirty_references(doc) -> str:
@@ -2448,3 +2448,291 @@ class InventorConnection:
             "Vector_Resolution": 400,
         })
         return f"PDF: {path} ({os.path.getsize(path)} bytes)"
+
+    # ---------- Assemblies ----------
+    # Geometry of a component is picked with a selector in the component's own part
+    # coordinates (mm), so it does not change when the component moves:
+    #   plane:XY | plane:XZ | plane:YZ      origin work plane
+    #   axis:X | axis:Y | axis:Z            origin work axis
+    #   circle:x,y,z,r                      circular edge with that center and radius
+    #   face:x,y,z                          face nearest the point
+    #   cylinder:x,y,z                      cylindrical or conical face nearest the point
+    #   edge:x,y,z                          edge nearest the point
+    # The component name "assembly" means the assembly's own origin planes and axes.
+
+    ASSEMBLY_TEMPLATE = "builtin:Metric/Standard (mm).iam"
+
+    def active_assembly(self):
+        doc = self.active_document()
+        if doc.DocumentType != 12291:  # kAssemblyDocumentObject
+            raise RuntimeError(f"Active document is not an assembly (type={doc.DocumentType}).")
+        return doc
+
+    def create_assembly(self, template: str = "") -> str:
+        path = self._resolve_template(template or self.ASSEMBLY_TEMPLATE)
+        if not os.path.exists(path):
+            raise RuntimeError(f"Assembly template not found: {path}")
+        doc = self._add_document(12291, path)
+        self.pin_document(doc)
+        self._constraint_logs = getattr(self, "_constraint_logs", {})
+        self._constraint_logs[doc.InternalName] = []
+        return f"Assembly created: {doc.DisplayName}"
+
+    def _occurrence(self, name: str):
+        occs = self.active_assembly().ComponentDefinition.Occurrences
+        names = []
+        for i in range(1, occs.Count + 1):
+            o = occs.Item(i)
+            if o.Name.lower() == name.lower():
+                return o
+            names.append(o.Name)
+        raise ValueError(f"No component named {name!r}. Components: {names}")
+
+    @staticmethod
+    def _pose(occ) -> str:
+        t = occ.Transformation
+        origin = [round(t.Cell(r, 4) * 10, 2) for r in (1, 2, 3)]
+        z_axis = [round(t.Cell(r, 3), 3) for r in (1, 2, 3)]
+        return f"origin {origin} mm, Z axis {z_axis}"
+
+    def place_component(self, path: str, x: float = 0, y: float = 0, z: float = 0,
+                        rx: float = 0, ry: float = 0, rz: float = 0, grounded: bool = False) -> str:
+        """Place a part or subassembly at (x, y, z) mm, turned rx, ry, rz degrees about X, Y, Z."""
+        import math
+        ad = self.active_assembly().ComponentDefinition
+        path = os.path.abspath(path)
+        if not os.path.exists(path):
+            raise RuntimeError(f"File not found: {path}")
+        tg = self._tg()
+        m = tg.CreateMatrix()
+        for angle, axis in ((rx, (1, 0, 0)), (ry, (0, 1, 0)), (rz, (0, 0, 1))):
+            if angle:
+                r = tg.CreateMatrix()
+                r.SetToRotation(math.radians(angle), tg.CreateVector(*axis), tg.CreatePoint(0, 0, 0))
+                r.PostMultiplyBy(m)
+                m = r
+        m.SetTranslation(tg.CreateVector(x / 10.0, y / 10.0, z / 10.0))
+        occ = ad.Occurrences.Add(path, m)
+        if grounded:
+            occ.Grounded = True
+        return f"Placed {occ.Name}{' (grounded)' if grounded else ''}: {self._pose(occ)}"
+
+    def _native_geometry(self, definition, selector: str):
+        """Resolve a selector on a part (or the assembly's own) component definition."""
+        kind, _, args = selector.partition(":")
+        kind = kind.strip().lower()
+        args = args.strip()
+        if kind in ("plane", "axis"):
+            index = {"YZ": 1, "XZ": 2, "XY": 3, "X": 1, "Y": 2, "Z": 3}.get(args.upper())
+            if index is None:
+                raise ValueError(f"Unknown {kind} {args!r}")
+            return (definition.WorkPlanes if kind == "plane" else definition.WorkAxes).Item(index)
+        values = [float(v) for v in args.split(",")] if args else []
+        tg = self._tg()
+        bodies = definition.SurfaceBodies
+        if kind == "circle":
+            if len(values) != 4:
+                raise ValueError("circle needs x,y,z,r")
+            x, y, z, r = values
+            for b in range(1, bodies.Count + 1):
+                edges = bodies.Item(b).Edges
+                for i in range(1, edges.Count + 1):
+                    e = edges.Item(i)
+                    if e.GeometryType != 5124:  # kCircleCurve
+                        continue
+                    g = e.Geometry
+                    if (abs(g.Radius * 10 - r) < 0.05 and abs(g.Center.X * 10 - x) < 0.05
+                            and abs(g.Center.Y * 10 - y) < 0.05 and abs(g.Center.Z * 10 - z) < 0.05):
+                        return e
+            raise ValueError(f"No circular edge with center ({x}, {y}, {z}) and radius {r}; "
+                             "list_occurrence_geometry shows the circles there are")
+        if kind in ("face", "cylinder", "edge"):
+            if len(values) != 3:
+                raise ValueError(f"{kind} needs x,y,z")
+            p = tg.CreatePoint(values[0] / 10, values[1] / 10, values[2] / 10)
+            best, best_d = None, None
+            for b in range(1, bodies.Count + 1):
+                items = bodies.Item(b).Edges if kind == "edge" else bodies.Item(b).Faces
+                for i in range(1, items.Count + 1):
+                    item = items.Item(i)
+                    if kind == "cylinder" and item.SurfaceType not in (5891, 5893):
+                        continue
+                    q = item.GetClosestPointTo(p)
+                    d = ((q.X - p.X) ** 2 + (q.Y - p.Y) ** 2 + (q.Z - p.Z) ** 2) ** 0.5
+                    if best_d is None or d < best_d:
+                        best, best_d = item, d
+            if best is None:
+                raise ValueError(f"No {kind} in the component")
+            if best_d * 10 > 1.0:
+                raise ValueError(f"Nearest {kind} is {best_d * 10:.1f} mm from ({args})")
+            return best
+        raise ValueError(f"Unknown selector {selector!r}: use plane:, axis:, circle:, face:, cylinder: or edge:")
+
+    def _geometry(self, occurrence: str, selector: str):
+        """Assembly-context geometry (a proxy) for a selector on a component."""
+        if occurrence.lower() == "assembly":
+            return self._native_geometry(self.active_assembly().ComponentDefinition, selector)
+        occ = self._occurrence(occurrence)
+        return occ.CreateGeometryProxy(self._native_geometry(occ.Definition, selector))
+
+    def list_occurrence_geometry(self, occurrence: str, kind: str = "circles") -> list[str]:
+        """Selectors for the circular edges ("circles") or planar faces ("planes") of a component."""
+        definition = self._occurrence(occurrence).Definition
+        out = []
+        bodies = definition.SurfaceBodies
+        for b in range(1, bodies.Count + 1):
+            body = bodies.Item(b)
+            if kind == "circles":
+                for i in range(1, body.Edges.Count + 1):
+                    e = body.Edges.Item(i)
+                    if e.GeometryType == 5124:
+                        g = e.Geometry
+                        out.append(f"circle:{g.Center.X * 10:g},{g.Center.Y * 10:g},{g.Center.Z * 10:g},{g.Radius * 10:g}")
+            elif kind == "planes":
+                for i in range(1, body.Faces.Count + 1):
+                    f = body.Faces.Item(i)
+                    if f.SurfaceType == 5890:
+                        r = f.Evaluator.RangeBox
+                        c = [(getattr(r.MinPoint, a) + getattr(r.MaxPoint, a)) / 2 * 10 for a in "XYZ"]
+                        out.append(f"face:{c[0]:.4g},{c[1]:.4g},{c[2]:.4g}")
+            else:
+                raise ValueError('kind must be "circles" or "planes"')
+        return sorted(set(out))
+
+    def add_constraint(self, kind: str, occurrence1: str, geometry1: str, occurrence2: str,
+                       geometry2: str, offset: float = 0, angle: float = 0,
+                       opposed: bool = True, name: str = "") -> str:
+        """kind: mate, flush, insert, angle, tangent. offset in mm (for insert, negative pushes
+        the second component into the first), angle in degrees, opposed for insert axes."""
+        import math
+        doc = self.active_assembly()
+        constraints = doc.ComponentDefinition.Constraints
+        e1 = self._geometry(occurrence1, geometry1)
+        e2 = self._geometry(occurrence2, geometry2)
+        kind = kind.lower()
+        if kind == "mate":
+            c = constraints.AddMateConstraint(e1, e2, offset / 10.0)
+        elif kind == "flush":
+            c = constraints.AddFlushConstraint(e1, e2, offset / 10.0)
+        elif kind == "insert":
+            c = constraints.AddInsertConstraint(e1, e2, opposed, offset / 10.0)
+        elif kind == "angle":
+            c = constraints.AddAngleConstraint(e1, e2, math.radians(angle))
+        elif kind == "tangent":
+            c = constraints.AddTangentConstraint(e1, e2, False, offset / 10.0)
+        else:
+            raise ValueError("kind must be mate, flush, insert, angle or tangent")
+        c.Name = name or f"{kind.capitalize()}_{occurrence1}_{occurrence2}".replace(":", "_")
+        doc.Update()
+        logs = getattr(self, "_constraint_logs", {})
+        log = logs.setdefault(doc.InternalName, [])
+        log.append({"step": len(log) + 1, "name": c.Name, "kind": kind,
+                    "first": {"component": occurrence1, "geometry": geometry1},
+                    "second": {"component": occurrence2, "geometry": geometry2},
+                    "offset_mm": offset, "angle_deg": angle, "opposed": opposed})
+        self._constraint_logs = logs
+        health = "healthy" if c.HealthStatus == 11778 else f"health {c.HealthStatus}"
+        moved = "" if occurrence2.lower() == "assembly" else f"; {occurrence2}: {self._pose(self._occurrence(occurrence2))}"
+        return f"{c.Name} ({health}){moved}"
+
+    def _write_constraint_log(self, doc) -> str:
+        """Constraint order next to the saved assembly, for an assembly sequence later."""
+        if doc.DocumentType != 12291 or not doc.FullFileName:
+            return ""
+        log = getattr(self, "_constraint_logs", {}).get(doc.InternalName)
+        if not log:
+            return ""
+        path = os.path.splitext(doc.FullFileName)[0] + ".constraints.json"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"assembly": os.path.basename(doc.FullFileName), "constraints": log}, f,
+                      indent=1, ensure_ascii=False)
+        return f" (constraint order: {os.path.basename(path)})"
+
+    def list_occurrences(self) -> list[dict]:
+        occs = self.active_assembly().ComponentDefinition.Occurrences
+        out = []
+        for i in range(1, occs.Count + 1):
+            o = occs.Item(i)
+            t = o.Transformation
+            dof = o.GetDegreesOfFreedom()
+            out.append({"name": o.Name,
+                        "file": os.path.basename(o.ReferencedDocumentDescriptor.FullDocumentName),
+                        "grounded": bool(o.Grounded),
+                        "origin_mm": [round(t.Cell(r, 4) * 10, 2) for r in (1, 2, 3)],
+                        "free_translations": dof[0], "free_rotations": dof[2]})
+        return out
+
+    def get_dof(self, occurrence: str = "") -> dict:
+        """Free translations and rotations of one component, or of all of them."""
+        rows = self.list_occurrences()
+        if occurrence:
+            rows = [r for r in rows if r["name"].lower() == occurrence.lower()]
+            if not rows:
+                raise ValueError(f"No component named {occurrence!r}")
+        free = [r["name"] for r in rows if r["free_translations"] or r["free_rotations"]]
+        return {"components": {r["name"]: [r["free_translations"], r["free_rotations"]] for r in rows},
+                "with_free_dof": free, "fully_constrained": not free}
+
+    def get_bom(self, view: str = "parts") -> list[dict]:
+        """Bill of materials: view "parts" (parts only) or "structured" (top level)."""
+        bom = self.active_assembly().ComponentDefinition.BOM
+        if view.lower().startswith("struct"):
+            bom.StructuredViewEnabled = True
+            name = "Structured"
+        else:
+            bom.PartsOnlyViewEnabled = True
+            name = "Parts Only"
+        bom_view = next(bom.BOMViews.Item(i) for i in range(1, bom.BOMViews.Count + 1)
+                        if bom.BOMViews.Item(i).Name == name)
+        out = []
+        rows = bom_view.BOMRows
+        for i in range(1, rows.Count + 1):
+            row = rows.Item(i)
+            document = row.ComponentDefinitions.Item(1).Document
+            props = document.PropertySets.Item("Design Tracking Properties")
+            out.append({"item": row.ItemNumber, "quantity": row.ItemQuantity,
+                        "part_number": props.Item("Part Number").Value,
+                        "description": props.Item("Description").Value,
+                        "file": os.path.basename(document.FullFileName)})
+        return out
+
+    def analyze_interference(self) -> list[dict]:
+        """Every overlapping pair with its volume. Tapped holes are cut at the minor diameter,
+        so a pair involving one is marked as a thread artifact, not a real clash."""
+        ad = self.active_assembly().ComponentDefinition
+        col = self.app.TransientObjects.CreateObjectCollection()
+        for i in range(1, ad.Occurrences.Count + 1):
+            col.Add(ad.Occurrences.Item(i))
+        results = ad.AnalyzeInterference(col)
+
+        def tapped(occ):
+            try:
+                holes = occ.Definition.Features.HoleFeatures
+                return any(holes.Item(i).Tapped for i in range(1, holes.Count + 1))
+            except Exception:
+                return False
+
+        out = []
+        for i in range(1, results.Count + 1):
+            r = results.Item(i)
+            a, b = r.OccurrenceOne, r.OccurrenceTwo
+            c = r.Centroid
+            out.append({"first": a.Name, "second": b.Name, "volume_mm3": round(r.Volume * 1000, 2),
+                        "centroid_mm": [round(c.X * 10, 1), round(c.Y * 10, 1), round(c.Z * 10, 1)],
+                        "cause": ("thread artifact: tapped hole modelled at the minor diameter"
+                                  if tapped(a) or tapped(b) else "real overlap")})
+        return out
+
+    def pattern_component(self, occurrences: str, axis_occurrence: str, axis: str,
+                          count: int, angle: float = 360) -> str:
+        """Circular pattern of components (comma-separated names) about an axis selector,
+        e.g. axis_occurrence "Flens:1", axis "axis:Z". angle is the total span in degrees."""
+        import math
+        ad = self.active_assembly().ComponentDefinition
+        col = self.app.TransientObjects.CreateObjectCollection()
+        for name in [n.strip() for n in occurrences.split(",") if n.strip()]:
+            col.Add(self._occurrence(name))
+        axis_entity = self._geometry(axis_occurrence, axis)
+        step = angle / count if abs(angle - 360) < 1e-9 else angle / max(count - 1, 1)
+        pattern = ad.OccurrencePatterns.AddCircularPattern(col, axis_entity, True, math.radians(step), count)
+        return f"Pattern {pattern.Name}: {count} x [{occurrences}] every {step:g} deg"

@@ -873,6 +873,117 @@ def export_pdf(path: str, all_sheets: bool = True, black_lines: bool = True) -> 
     return inv.export_pdf(path, all_sheets, black_lines)
 
 
+# ---------- Assemblies ----------
+
+@mcp.tool()
+def create_assembly(template: str = "") -> str:
+    """Create a new assembly (.iam) and make it the document the next tools work on.
+
+    Args:
+        template: template path; empty uses Inventor's Metric "Standard (mm).iam".
+    """
+    return inv.create_assembly(template)
+
+
+@mcp.tool()
+def place_component(path: str, x: float = 0, y: float = 0, z: float = 0, rx: float = 0,
+                    ry: float = 0, rz: float = 0, grounded: bool = False) -> str:
+    """Place a saved part or assembly file in the active assembly.
+
+    Args:
+        path: .ipt or .iam file. Placing the same file again adds another instance (Name:2, ...).
+        x, y, z: position of the part origin in mm.
+        rx, ry, rz: rotation in degrees about X, then Y, then Z.
+        grounded: fix the component in place (ground the first one).
+    """
+    return inv.place_component(path, x, y, z, rx, ry, rz, grounded)
+
+
+@mcp.tool()
+def list_occurrences() -> str:
+    """Components in the active assembly with file, grounded state, origin (mm) and free DOF."""
+    return json.dumps(inv.list_occurrences(), indent=1, ensure_ascii=False)
+
+
+@mcp.tool()
+def list_occurrence_geometry(occurrence: str, kind: str = "circles") -> str:
+    """Selectors for a component's circular edges or planar faces, to pick constraint geometry.
+
+    Args:
+        occurrence: component name, e.g. "Flens:1".
+        kind: "circles" or "planes".
+    """
+    return json.dumps(inv.list_occurrence_geometry(occurrence, kind), indent=1)
+
+
+@mcp.tool()
+def add_constraint(kind: str, occurrence1: str, geometry1: str, occurrence2: str, geometry2: str,
+                   offset: float = 0, angle: float = 0, opposed: bool = True, name: str = "") -> str:
+    """Constrain two components. The second one moves to meet the first.
+
+    Args:
+        kind: mate, flush, insert, angle or tangent.
+        occurrence1, occurrence2: component names, or "assembly".
+        geometry1, geometry2: geometry selectors (see below).
+        offset: mm. For insert, a negative offset pushes the second component into the first.
+        angle: degrees, for kind angle.
+        opposed: for insert, True when the two axes point against each other (bolt into hole).
+        name: constraint name; empty builds one from the kind and components.
+
+    Geometry selectors, in the component's own part coordinates (mm):
+        plane:XY | plane:XZ | plane:YZ   origin work plane
+        axis:X | axis:Y | axis:Z         origin work axis
+        circle:x,y,z,r                   circular edge with that center and radius
+        face:x,y,z                       face nearest the point (within 1 mm)
+        cylinder:x,y,z                   cylindrical or conical face nearest the point
+        edge:x,y,z                       edge nearest the point
+    Component "assembly" means the assembly's own origin planes and axes.
+
+    Every constraint is logged in order; save_document writes the log next to the .iam
+    as <name>.constraints.json.
+    """
+    return inv.add_constraint(kind, occurrence1, geometry1, occurrence2, geometry2,
+                              offset, angle, opposed, name)
+
+
+@mcp.tool()
+def get_dof(occurrence: str = "") -> str:
+    """Free translations and rotations per component; empty checks all of them."""
+    return json.dumps(inv.get_dof(occurrence), indent=1)
+
+
+@mcp.tool()
+def get_bom(view: str = "parts") -> str:
+    """Bill of materials of the active assembly.
+
+    Args:
+        view: "parts" (parts only, quantities summed) or "structured" (top level).
+    """
+    return json.dumps(inv.get_bom(view), indent=1, ensure_ascii=False)
+
+
+@mcp.tool()
+def analyze_interference() -> str:
+    """Overlapping component pairs with volume (mm³) and centroid. Pairs with a tapped hole
+    are marked as thread artifacts, since tapped holes are modelled at the minor diameter."""
+    return json.dumps(inv.analyze_interference(), indent=1)
+
+
+@mcp.tool()
+def pattern_component(occurrences: str, axis_occurrence: str, axis: str, count: int,
+                      angle: float = 360) -> str:
+    """Circular pattern of components about an axis, e.g. a bolt set around a flange.
+
+    Args:
+        occurrences: comma-separated component names, e.g. "Baut:1, Mur:1, Ring:1".
+        axis_occurrence: component that owns the axis, or "assembly".
+        axis: axis selector such as "axis:Z", or "cylinder:x,y,z" for a face's axis.
+        count: number of instances including the original.
+        angle: total span in degrees; 360 spreads them evenly around.
+    """
+    return inv.pattern_component(occurrences, axis_occurrence, axis, count, angle)
+
+
 def main():
     mcp.run(transport="stdio")
 

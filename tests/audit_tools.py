@@ -701,6 +701,110 @@ def drawing():
     close_audit_files()
 
 
+def assembly():
+    """Disk with a center hole and pins: every constraint kind, DOF, BOM, interference, pattern."""
+    close_audit_files()
+    disk, pin = OUT / "audit_disk.ipt", OUT / "audit_pin.ipt"
+    srv.create_part("audit_disk")
+    srv.create_sketch("XY")
+    srv.draw_circle(0, 0, 60)
+    srv.extrude(10)
+    srv.create_sketch("XY")
+    srv.draw_circle(0, 0, 10)
+    srv.extrude(10, operation="cut")
+    srv.save_document(str(disk))
+    srv.create_part("audit_pin")
+    srv.create_sketch("XY")
+    srv.draw_circle(0, 0, 10)
+    srv.extrude(30)
+    srv.save_document(str(pin))
+
+    check("create_assembly", srv.create_assembly)
+    check("place_component grounded", lambda: srv.place_component(str(disk), grounded=True))
+    check("place_component rotated", lambda: srv.place_component(str(pin), 30, 0, 20, rx=90))
+
+    def circles():
+        found = json.loads(srv.list_occurrence_geometry("audit_disk:1"))
+        assert "circle:0,0,10,5" in found, found
+        return found
+    check("list_occurrence_geometry circles", circles)
+    check("list_occurrence_geometry planes",
+          lambda: json.loads(srv.list_occurrence_geometry("audit_disk:1", "planes")))
+
+    def insert():
+        out = srv.add_constraint("insert", "audit_disk:1", "circle:0,0,10,5",
+                                 "audit_pin:1", "circle:0,0,0,5")
+        assert "origin [0.0, 0.0, 10.0]" in out, out
+        free = json.loads(srv.get_dof())["with_free_dof"]
+        assert free == ["audit_pin:1"], f"only the pin's spin should be free: {free}"
+        return out
+    check("add_constraint insert + get_dof", insert)
+
+    def angle():
+        out = srv.add_constraint("angle", "audit_disk:1", "plane:XZ", "audit_pin:1", "plane:XZ",
+                                 angle=30)
+        assert json.loads(srv.get_dof())["fully_constrained"], srv.get_dof()
+        return out
+    check("add_constraint angle", angle)
+
+    def mate_tangent():
+        srv.place_component(str(pin), 20, 5, 15)
+        out = srv.add_constraint("mate", "audit_disk:1", "face:20,0,10", "audit_pin:2", "face:0,0,0")
+        out += " | " + srv.add_constraint("tangent", "audit_pin:1", "cylinder:5,0,15",
+                                          "audit_pin:2", "cylinder:5,0,15")
+        z = json.loads(srv.list_occurrences())[2]["origin_mm"][2]
+        assert abs(z - 10) < 0.01, f"pin 2 base at z={z}, expected 10"
+        return out
+    check("add_constraint mate face + tangent cylinder", mate_tangent)
+
+    def flush_assembly():
+        return srv.add_constraint("flush", "assembly", "plane:YZ", "audit_pin:2", "plane:YZ",
+                                  offset=0)
+    check("add_constraint flush to assembly plane", flush_assembly)
+
+    def edge_selector():
+        e = srv.inv._geometry("audit_disk:1", "edge:30,0,10")
+        assert e.GeometryType == 5124, e.GeometryType
+        try:
+            srv.inv._geometry("audit_disk:1", "face:0,0,50")
+        except ValueError as exc:
+            return f"edge found; far point refused: {exc}"
+        raise AssertionError("a point 40 mm away still matched a face")
+    check("edge selector and distance limit", edge_selector)
+
+    def pattern():
+        out = srv.pattern_component("audit_pin:2", "audit_disk:1", "axis:Z", 4)
+        names = [o["name"] for o in json.loads(srv.list_occurrences())]
+        assert len(names) == 6, names
+        return out
+    check("pattern_component", pattern)
+
+    def bom():
+        rows = {r["file"]: r["quantity"] for r in json.loads(srv.get_bom("parts"))}
+        assert rows == {"audit_disk.ipt": 1, "audit_pin.ipt": 5}, rows
+        structured = json.loads(srv.get_bom("structured"))
+        return f"parts {rows}; structured {len(structured)} rows"
+    check("get_bom", bom)
+
+    def interference():
+        assert json.loads(srv.analyze_interference()) == [], srv.analyze_interference()
+        srv.place_component(str(pin), 20, 0, 0, grounded=True)
+        clashes = json.loads(srv.analyze_interference())
+        assert len(clashes) == 1 and clashes[0]["cause"] == "real overlap", clashes
+        assert abs(clashes[0]["volume_mm3"] - math.pi * 25 * 10) < 1, clashes
+        return clashes
+    check("analyze_interference", interference)
+
+    def save_log():
+        out = srv.save_document(str(OUT / "audit_assembly.iam"))
+        log = json.loads((OUT / "audit_assembly.constraints.json").read_text(encoding="utf-8"))
+        kinds = [c["kind"] for c in log["constraints"]]
+        assert kinds == ["insert", "angle", "mate", "tangent", "flush"], kinds
+        return out
+    check("save_document writes the constraint log", save_log)
+    close_audit_files()
+
+
 def server_only():
     """Tools that live only in server.py."""
     check("execute_python stdout", lambda: _equal(srv.execute_python("print(1 + 1)"), "2"))
@@ -731,7 +835,7 @@ def _equal(actual, expected):
 
 
 def main():
-    for group in (solid_block, revolves, extrude_variants, sheet_metal, drawing, server_only):
+    for group in (solid_block, revolves, extrude_variants, sheet_metal, drawing, assembly, server_only):
         print(f"\n{group.__name__}: {group.__doc__}", flush=True)
         try:
             group()
