@@ -72,10 +72,10 @@ Selesai jika: smoke.py PASS semua, commit terlihat di GitHub fork, `.mcp.json` t
 
 Tujuan: tahu persis apa yang rusak sebelum membangun di atasnya.
 
-* \[ ] Jalankan **setiap** tool yang sudah ada minimal sekali pada part uji (termasuk hole tapped, counterbore, fillet, chamfer, circular pattern, revolve, sheet metal face/flange/cut, set/add parameter, export STEP).
-* \[ ] Verifikasi semua konstanta enum di bagian atas `inventor\_api.py` terhadap type library 2027.
-* \[ ] Perbaiki yang rusak. Setiap perbaikan dicatat di `docs/inventor-2027-notes.md` (apa yang berubah dari 2026).
-* \[ ] Tambahkan kasus smoke.py untuk fitur yang belum tercakup: chamfer, fillet, tapped hole, circular pattern, sheet metal flange + flat pattern.
+* \[x] Jalankan **setiap** tool yang sudah ada minimal sekali pada part uji (termasuk hole tapped, counterbore, fillet, chamfer, circular pattern, revolve, sheet metal face/flange/cut, set/add parameter, export STEP).
+* \[x] Verifikasi semua konstanta enum di bagian atas `inventor\_api.py` terhadap type library 2027.
+* \[x] Perbaiki yang rusak. Setiap perbaikan dicatat di `docs/inventor-2027-notes.md` (apa yang berubah dari 2026).
+* \[x] Tambahkan kasus smoke.py untuk fitur yang belum tercakup: chamfer, fillet, tapped hole, circular pattern, sheet metal flange + flat pattern.
 
 Selesai jika: semua tool lama jalan di 2027 atau tercatat sebagai rusak beserta alasannya.
 
@@ -164,6 +164,7 @@ Diisi oleh sesi Claude Code setiap akhir fase. Entri terbaru di bawah.
 |Tanggal|Fase|Status|Catatan|
 |-|-|-|-|
 |2026-11-13|0|Selesai|smoke.py 2/2 PASS (silinder 19 635,0 mm³; flens 267 697,2 mm³). Commit a096a41 di origin/main; `.mcp.json` dan `.claude/` diabaikan git. Run pertama smoke.py menggantung: tidak ada Inventor yang berjalan, `connect()` menyalakan instance baru yang tidak merespons. Lulus setelah Inventor dibuka manual.|
+|2026-11-14|1|Selesai|tests/audit_tools.py: 57 PASS, 0 FAIL (semua 36 tool). smoke.py 6/6 PASS. Diperbaiki: export_document (nama translator berubah di 2027, sekarang lewat ClassId), dialog Style Conflict yang menahan create_part (SilentOperation), list_edges/find_edge untuk lingkaran penuh, tabel SurfaceTypeEnum, stderr execute_python. Enum lain cocok dengan RxInventor.tlb 2027. Detail di docs/inventor-2027-notes.md.|
 
 
 
