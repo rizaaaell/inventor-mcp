@@ -51,7 +51,8 @@ Other values confirmed in the library:
   MCP request times out and the server reports "Not connected to Inventor". In the
   audit it showed up on the first document of a fresh Inventor session.
   Fixed: `create_part` sets `Application.SilentOperation = True` around
-  `Documents.Add`, which accepts the dialog's default.
+  `Documents.Add`, which accepts the dialog's default. Verified on a freshly
+  started Inventor: the audit's first `create_part` ran with no dialog.
 - The call that timed out still completes inside Inventor afterwards. That left an
   extra unnamed `PartN` document open more than once.
 - `connect()` starts a new Inventor when none is running. That instance once sat at
