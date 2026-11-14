@@ -39,12 +39,11 @@ section = view_name(out := srv.add_section_view(front, 0, -70, 0, 70, 255, 150, 
 print(srv.add_base_view(MODEL, 350, 220, 0.5, "iso_top_right"))
 for v in (front, top, section):
     print(srv.add_centerlines(v))
-# Lengths come from the model in the top view; its diameters are drawn in the section
-# instead, and only the chamfer on the right-hand stack is kept.
+# Lengths come from the model in the top view. Its diameters are drawn in the section
+# instead, and the chamfer gets a note there, so only 20 and 50 stay.
 print(srv.retrieve_dimensions(top))
-top_right = srv.inv._view_rect(srv.inv._view(top))[2]
-drop = [d["index"] for d in json.loads(srv.list_dimensions()) if d["view"] == top
-        and (d["text"].startswith("n") or (d["text"] == "1" and d["text_mm"][0] < top_right))]
+drop = [d["index"] for d in json.loads(srv.list_dimensions())
+        if d["view"] == top and d["text"] not in ("20", "50")]
 print(srv.delete_dimension(",".join(map(str, drop))))
 
 # Section A-A (hub left, x -25..5; disk right, x 5..25; bore ±15, hub ±30, disk ±60):
@@ -53,11 +52,10 @@ print(srv.add_dimension(section, "vertical", -15, 15, -15, -15, text_x=-37, text
 print(srv.add_dimension(section, "vertical", -15, 30, -15, -30, text_x=-47, text_y=0, prefix="Ø"))
 print(srv.add_dimension(section, "vertical", 15, 60, 15, -60, text_x=-57, text_y=0, prefix="Ø"))
 
-# Front view: only what the circular view shows best, the bolt circle and the holes.
-print(srv.add_hole_note(front, 0, 50.5, -55, 72))
-print(srv.add_dimension(front, "pcd", 0, -45, text_x=-58, text_y=-72))
-# Hole spacing from the bore center, outside the flange rim.
-print(srv.add_dimension(front, "angle", 45, 0, 0, 45, text_x=50, text_y=50, vertex_x=15, vertex_y=0))
+# Front view: the holes and their bolt circle in one note, the position frame under it.
+print(srv.add_hole_note(front, 0, -50.5, -55, -74, second_line="EQ SP ON PCD Ø90"))
+# Both outer edges of the disk carry the same 1 mm chamfer; it shows as a slant in the section.
+print(srv.add_chamfer_note(section, 24.6, 59.6, 25, 45, 32, 72, prefix="2x "))
 
 # Tolerances and GD&T. These are proposals for a shaft coupling flange, not values
 # from a released design: bore H7 on the shaft, mating face A, bore axis B; face A flat
@@ -65,15 +63,11 @@ print(srv.add_dimension(front, "angle", 45, 0, 0, 45, text_x=50, text_y=50, vert
 bore = next(d["index"] for d in json.loads(srv.list_dimensions())
             if d["view"] == section and d["text"].startswith("Ø30"))
 print(srv.set_tolerance(bore, "fit", fit="H7"))
-# The position tolerance locates the holes from basic (exact, boxed) PCD and spacing.
-for d in json.loads(srv.list_dimensions()):
-    if d["view"] == front and (d["text"] == "n90" or d["text"].endswith("°")):
-        print(srv.set_tolerance(d["index"], "basic"))
-print(srv.add_gdt(front, 0, 0, -52, 63, "position", 0.2, "A,B", diameter_zone=True, leader=False))
-print(srv.add_datum(section, 25, 40, "A", 42, 62))
+print(srv.add_gdt(front, 0, 0, -50, -80, "position", 0.2, "A,B", diameter_zone=True, leader=False))
+print(srv.add_datum(section, 25, 40, "A", 45, 40))
 # On the extension line of Ø30 H7 the triangle makes the bore axis the datum.
 print(srv.add_datum(section, -31, -15, "B", -31, -23, attach=False))
-print(srv.add_surface_finish(section, -29, 15, -29, 24, "Ra 1,6", attach=False))
+print(srv.add_surface_finish(section, -24.5, 15, -31, 16, "Ra 1,6"))  # bore end, on its extension line
 print(srv.add_gdt(section, 25, -40, 45, -72, "flatness", 0.03))
 print(srv.add_gdt(section, 25, -48, 45, -84, "perpendicularity", 0.05, "B"))
 print(srv.add_surface_finish(section, 25, -10, 50, -20, "Ra 3,2"))

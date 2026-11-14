@@ -29,5 +29,6 @@
     ".XX": "0,1",
     ".XXX": "0,05",
     "ANGULAR": "1°"
-  }
+  },
+  "centerline_line_type": "chain"
 }

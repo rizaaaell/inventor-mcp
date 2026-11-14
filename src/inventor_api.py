@@ -1409,6 +1409,13 @@ class InventorConnection:
                 std.SetViewAnnotationDefaults(view_type, labels[key])
         if profile.get("general_tolerances"):
             self._write_general_tolerances(doc, profile["general_tolerances"])
+        line_type = {"chain": 37644, "dashed": 37641, "continuous": 37633}.get(
+            profile.get("centerline_line_type", ""))
+        if line_type:
+            # The ISO centerline layer comes out as plain dashes on circles, which reads as a
+            # hidden line around a bolt circle; chain is long dash, short dash (ISO 128).
+            for attr in ("CenterlineLayer", "CentermarkLayer"):
+                getattr(defaults, attr).LineType = line_type
 
     def _write_general_tolerances(self, doc, values: dict) -> None:
         """Put the profile's general tolerances after each "=±" of the title block's
@@ -1696,6 +1703,12 @@ class InventorConnection:
                 boxes.append((f"hole note {n.Text.Text}", self._rect(n.Text)))
             except Exception:
                 pass
+        notes = sheet.DrawingNotes.ChamferNotes
+        for i in range(1, notes.Count + 1):
+            try:  # a chamfer note's Text is a plain string; the box is the note's own
+                boxes.append((f"chamfer note {notes.Item(i).Text}", self._rect(notes.Item(i))))
+            except Exception:
+                pass
         return boxes
 
     def _text_boxes(self, sheet):
@@ -1974,9 +1987,10 @@ class InventorConnection:
             raise ValueError(f"No circular centerline in view {view.Name}; run add_centerlines first")
         return best, best_d * 10 / view.Scale
 
-    def add_hole_note(self, view: str, x: float, y: float, text_x: float, text_y: float) -> str:
+    def add_hole_note(self, view: str, x: float, y: float, text_x: float, text_y: float,
+                      second_line: str = "") -> str:
         """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for a patterned hole.
-        Points are model mm from the view center."""
+        second_line goes under it, e.g. "EQ SP ON PCD Ø90". Points are model mm from the view center."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
@@ -1986,8 +2000,35 @@ class InventorConnection:
         if quantity:
             note.FormattedQuantityNote = quantity
             note.FormattedHoleThreadNote = "<QuantityNote/>" + note.FormattedHoleThreadNote
+        if second_line:
+            # Inside the last style run, or the line falls back to a large default font.
+            head, sep, tail = note.FormattedHoleThreadNote.rpartition("</StyleOverride>")
+            note.FormattedHoleThreadNote = (head + "<Br/>" + second_line + sep + tail) if sep                 else note.FormattedHoleThreadNote + "<Br/>" + second_line
         clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"hole note {note.Text.Text}" in c]
         return (f"Hole note '{note.Text.Text}' in {v.Name} (picked hole edge within {miss:.1f} mm); "
+                f"text overlaps: {clashes or 'none'}")
+
+    def add_chamfer_note(self, view: str, x: float, y: float, ref_x: float, ref_y: float,
+                         text_x: float, text_y: float, prefix: str = "") -> str:
+        """Chamfer note ("1 x 45°") on the chamfer line nearest (x, y), measured against the
+        edge nearest (ref_x, ref_y). prefix, e.g. "2x ", counts chamfers of the same size.
+        Points are model mm from the view center."""
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        chamfer, m1 = self._nearest_curve(v, x, y)
+        reference, m2 = self._nearest_curve(v, ref_x, ref_y)
+        try:
+            note = sheet.DrawingNotes.ChamferNotes.Add(self._view_point(v, text_x, text_y), chamfer, reference)
+        except Exception as exc:
+            raise ValueError(f"Inventor refused a chamfer note on the curves near ({x}, {y}) and "
+                             f"({ref_x}, {ref_y}) in {v.Name}: pick the slanted chamfer line and the "
+                             "edge it meets, in a view where the chamfer shows as a slant") from exc
+        # The default format carries a zero symmetric tolerance and prints "1 ± 0 X 45° ± 0°".
+        text = re.sub(r" (?:UpperTolerance|LowerTolerance|ToleranceType|TolerancePrecision|"
+                      r"ToleranceAlternatePrecision)='[^']*'", "", note.FormattedChamferNote)
+        note.FormattedChamferNote = prefix + text
+        clashes = [c for c in self._clashes(self._text_boxes(sheet)) if "chamfer note" in c[0] or "chamfer note" in c[1]]
+        return (f"Chamfer note '{note.Text}' in {v.Name} (picked edges within {max(m1, m2):.1f} mm); "
                 f"text overlaps: {clashes or 'none'}")
 
     def list_dimensions(self) -> list[dict]:

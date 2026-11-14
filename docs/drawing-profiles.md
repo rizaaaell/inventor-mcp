@@ -23,6 +23,7 @@ standard; no code change or server restart is needed.
 | `labels.section_view`, `labels.detail_view`, `labels.auxiliary_view` | title above the view |
 | `labels.section_line`, `labels.detail_fence` | letter at the section line ends and at the detail circle |
 | `hole_note_quantity` | prefix of hole notes on patterned holes; `<Quantity/>` is the hole count |
+| `centerline_line_type` | `chain` (long dash, short dash, as ISO 128 wants for axes and pitch circles), `dashed` or `continuous`; the ISO centerline layer otherwise draws bolt circles as plain dashes that look like hidden lines |
 | `centerline_overshoot_mm` | how far `add_centerlines` runs each cylinder axis past the outline |
 | `title_block_aliases` | names people use for a field the title block calls otherwise, e.g. `"APPROVED BY": "CHECKED BY"` in the Arjuna block |
 | `title_block_defaults` | values filled into empty fields when the first view is placed, e.g. `"DOCUMENT TYPE": "ENGINEERING DRAWING"` |

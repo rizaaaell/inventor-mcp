@@ -718,10 +718,26 @@ def add_dimension(view: str, kind: str, x1: float, y1: float,
 
 
 @mcp.tool()
-def add_hole_note(view: str, x: float, y: float, text_x: float, text_y: float) -> str:
+def add_hole_note(view: str, x: float, y: float, text_x: float, text_y: float,
+                  second_line: str = "") -> str:
     """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for patterned holes.
-    The quantity prefix comes from the drawing profile. Points are model mm from the view center."""
-    return inv.add_hole_note(view, x, y, text_x, text_y)
+    The quantity prefix comes from the drawing profile. second_line goes under it, e.g.
+    "EQ SP ON PCD Ø90" to give the bolt circle in the same note. Points are model mm from
+    the view center."""
+    return inv.add_hole_note(view, x, y, text_x, text_y, second_line)
+
+
+@mcp.tool()
+def add_chamfer_note(view: str, x: float, y: float, ref_x: float, ref_y: float,
+                     text_x: float, text_y: float, prefix: str = "") -> str:
+    """Chamfer note ("1 x 45°") on the chamfer line nearest (x, y), against the adjacent
+    edge nearest (ref_x, ref_y). Use a view where the chamfer shows as a slanted line.
+
+    Args:
+        prefix: count of equal chamfers, e.g. "2x ".
+        text_x, text_y: note position, model mm from the view center, outside the part.
+    """
+    return inv.add_chamfer_note(view, x, y, ref_x, ref_y, text_x, text_y, prefix)
 
 
 @mcp.tool()

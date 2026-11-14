@@ -643,6 +643,21 @@ def drawing():
         return f"{out}; {srv.set_tolerance(index, 'basic')}"
     check("add_dimension angle + basic", angle)
 
+    def chamfer_note():
+        # The block's 1 mm bottom chamfer shows as a slant at one bottom corner of section A
+        # (z across, y up); which side is the bottom depends on the cut direction.
+        errors = []
+        for side in (-1, 1):
+            try:
+                out = srv.add_chamfer_note(state["section"], side * 15.6, -49.6, side * 16, -40,
+                                           side * 30, -62, prefix="2x ")
+                assert "±" not in out and "2x" in out, out
+                return out
+            except ValueError as exc:
+                errors.append(str(exc)[:60])
+        raise AssertionError(f"no chamfer found at either bottom corner: {errors}")
+    check("add_chamfer_note", chamfer_note)
+
     def fit():
         listed = json.loads(srv.list_dimensions())
         target = next(d for d in listed if d["view"] == state["front"] and d["text"].startswith("n20"))

@@ -214,6 +214,14 @@ The translators report `Activated = False` until used; call `Activate()` first.
 - `SurfaceTextureSymbols.Add(leaderPoints, type, forceTail, majority, allAround, maxRoughness)`.
 - `Sheet.CreateGeometryIntent(curve)` without a point attaches a leader to the curve's
   start; pass a sheet `Point2d` on the curve as the second argument to land elsewhere.
+- The ISO centerline layer draws a circular centerline (a bolt circle) as plain dashes, which reads
+  as a hidden line. Setting the layer's `LineType` to 37644 (`kChainLineType`) gives the long dash,
+  short dash chain that ISO 128 asks for, on straight and circular centerlines alike.
+- `DrawingNotes.ChamferNotes.Add(position, chamferCurve, adjacentCurve)` gives "1 X 45°"; its
+  default format carries a zero symmetric tolerance ("1 ± 0 X 45° ± 0°"), strip the Tolerance
+  attributes from `FormattedChamferNote`. A chamfer note's `Text` is a plain string.
+- Text appended to `FormattedHoleThreadNote` after the last `</StyleOverride>` falls back to a
+  large default font; put extra lines inside that run.
 - Automated centerlines include the bolt circle of a circular pattern. A circular
   `Centerline` has `Geometry.Center` / `Radius` in sheet cm, and
   `GeneralDimensions.AddDiameter(textPos, sheet.CreateGeometryIntent(centerline))`
