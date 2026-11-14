@@ -189,6 +189,13 @@ The translators report `Activated = False` until used; call `Activate()` first.
   managers); import them through the Style and Standard Editor. The editor's library
   is read-only here, so imports land in the document's local styles.
 - `Documents.Add` fails with `E_INVALIDARG` when the template file is open in Inventor.
+- With the project's style library in use, a new document takes the library's version
+  of every style name the library has; the template's edits to those styles are
+  dropped (the "Style Conflict" dialog says so). Styles under new names survive. Hence
+  "Arjuna Standard" / "Arjuna Object Defaults" / "Arjuna Leader" / "Arjuna Note Text".
+- Retrieved dimensions in a side view of a turned part also bring the sketch diameters,
+  placed wherever there is room, which can be outside the border. Diameters of turned
+  parts read better as Ø-prefixed linear dimensions in the section or side view.
 - `TextBox.FormattedText` takes the decimal mark the document uses
   (`FontSize='0,2'` here); the other mark is refused with `E_INVALIDARG`.
 - Tolerances: `GeneralDimension.Tolerance.SetToSymmetric / SetToDeviation /

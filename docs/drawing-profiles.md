@@ -26,6 +26,7 @@ standard; no code change or server restart is needed.
 | `centerline_overshoot_mm` | how far `add_centerlines` runs each cylinder axis past the outline |
 | `title_block_aliases` | names people use for a field the title block calls otherwise, e.g. `"APPROVED BY": "CHECKED BY"` in the Arjuna block |
 | `title_block_defaults` | values filled into empty fields when the first view is placed, e.g. `"DOCUMENT TYPE": "ENGINEERING DRAWING"` |
+| `general_tolerances` | values written after each "=±" of the title block's TOLERANCES OTHERWISE NOTED text, e.g. `{".X": "0,2", ".XX": "0,1", ".XXX": "0,05", "ANGULAR": "1°"}` |
 
 Label texts use Inventor's tokens: `<DrawingViewName/>`, `<DrawingViewScale/>`,
 `<DrawingViewSheetName/>`, `<DrawingViewSheetIndex/>`, `<DrawingViewSheetZone/>`
@@ -44,11 +45,18 @@ library are not touched.
    2 mm so "Rachmadi Norcahyo" fits the APPROVED BY box. Rerunning it keeps existing
    copies (and their imported styles); `--force` starts over from the originals.
 2. The Arjuna styles (`Arjuna Fix.styxml`: dimension style "Arjuna", one decimal,
-   comma, no trailing zeros, Tahoma 3.5 mm text, ISO leader; `Mini Center Mark` and
+   comma, no trailing zeros, Tahoma 3.5 mm text, leader; `Mini Center Mark` and
    `Super Mini Center Mark`) have no import call in the Inventor API. Open the copy,
-   Manage → Styles Editor → Import each `.styxml`, Save and Close. Then make "Arjuna"
-   the default dimension style in Object Defaults and save the template (done for
-   `Template Landscape Arjuna FIX A3.idw` on 2026-11-14; the other four still need it).
+   Manage → Styles Editor → Import each `.styxml`, Save and Close, close the template,
+   and run the script again: it copies the imported leader and text styles to
+   "Arjuna Leader" and "Arjuna Note Text" and makes "Arjuna Standard" active with
+   "Arjuna Object Defaults" pointing at them. Done for
+   `Template Landscape Arjuna FIX A3.idw` on 2026-11-14; the other four still need it.
+
+   The copies matter: with the project's style library on, a new drawing replaces every
+   style whose name the library also has (`Object Defaults (ISO)`, `General (ISO)`,
+   `Note Text (ISO)`) with the library version, so imported settings under those names
+   are lost.
 3. Close the template in Inventor before making drawings: `Documents.Add` refuses a
    template that is open.
 
