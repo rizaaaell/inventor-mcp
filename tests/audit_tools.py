@@ -76,6 +76,13 @@ def close_active():
     srv.inv.active_document().Close(True)
 
 
+def close_audit_files():
+    """Close documents opened from OUT, e.g. the model a drawing view loaded."""
+    for doc in list(srv.inv.app.Documents):
+        if doc.FullFileName and Path(doc.FullFileName).parent == OUT:
+            doc.Close(True)
+
+
 def sketch_point_for_world(x, y, z):
     """Sketch coordinates (mm) of a world point, for sketches on body faces."""
     sketches = comp().Sketches
@@ -274,10 +281,26 @@ def solid_block():
     check("transaction abort", abort)
 
     OUT.mkdir(parents=True, exist_ok=True)
+    solid = srv.inv.active_document()
+    close_audit_files()  # left over from an earlier run; would block the save below
+    srv.inv.pin_document(solid)
     for f in OUT.glob("audit_*"):
         f.unlink()
     check("save_document as", lambda: srv.save_document(str(OUT / "audit_solid.ipt")))
     check("save_document in place", lambda: srv.save_document(""))
+
+    def save_onto_open():
+        srv.create_part("audit_other")
+        try:
+            srv.save_document(str(OUT / "audit_solid.ipt"))
+        except RuntimeError as exc:
+            assert "is open in Inventor" in str(exc), exc
+            return str(exc)[:70]
+        finally:
+            srv.inv.active_document().Close(True)
+            srv.inv.pin_document(solid)
+        raise AssertionError("saving onto an open file was not refused")
+    check("save_document refuses a file that is open", save_onto_open)
 
     for fmt, ext in (("STEP", "stp"), ("STL", "stl"), ("SAT", "sat"), ("IGES", "igs")):
         def export(fmt=fmt, ext=ext):
@@ -466,6 +489,115 @@ def sheet_metal():
     close_active()
 
 
+def drawing():
+    """All drawing tools on an A3 sheet of the solid block saved by solid_block()."""
+    model = str(OUT / "audit_solid.ipt")
+    check("create_drawing", lambda: srv.create_drawing("iso", "A3"))
+
+    def rejected():
+        try:
+            srv.add_base_view(model, 110, 270)
+        except ValueError as exc:
+            assert "outside the border" in str(exc), exc
+            return str(exc).split(":")[0]
+        raise AssertionError("a view past the top border was accepted")
+    check("add_base_view rejects a view outside the border", rejected)
+
+    def base():
+        out = srv.add_base_view(model, 110, 200)
+        state["front"] = out.split()[2].rstrip(":")
+        return out
+    check("add_base_view", base)
+
+    def projected():
+        out = srv.add_projected_view(state["front"], 110, 90)
+        state["top"] = out.split()[2]
+        return out
+    check("add_projected_view", projected)
+
+    def section():
+        out = srv.add_section_view(state["front"], -70, 0, 70, 0, 110, 90, "A")
+        raise AssertionError(f"section on top of the projected view was accepted: {out}")
+
+    def section_rejected():
+        try:
+            section()
+        except ValueError as exc:
+            assert "overlaps view" in str(exc), exc
+            return "overlap with the projected view rejected"
+    check("add_section_view rejects an overlap", section_rejected)
+
+    def section_ok():
+        out = srv.add_section_view(state["front"], 0, -70, 0, 70, 250, 200, "A")
+        state["section"] = out.split()[2]
+        return out
+    check("add_section_view", section_ok)
+
+    def detail():
+        out = srv.add_detail_view(state["front"], 35, 0, 10, 355, 200, 2.0, "B")
+        state["detail"] = out.split()[2]
+        return out
+    check("add_detail_view", detail)
+
+    for key in ("front", "top", "section"):
+        check(f"add_centerlines {key}", lambda key=key: srv.add_centerlines(state[key]))
+    for key in ("front", "top"):
+        def retrieve(key=key):
+            out = srv.retrieve_dimensions(state[key])
+            assert "Retrieved" in out and "remaining text overlaps: none" in out, out
+            return out
+        check(f"retrieve_dimensions {key}", retrieve)
+
+    def diameter():
+        out = srv.add_dimension(state["detail"], "diameter", 4, 0, text_x=-12, text_y=-14)
+        assert "n8" in out, out
+        return out
+    check("add_dimension diameter", diameter)
+
+    def linear():
+        out = srv.add_dimension(state["top"], "horizontal", -50, 0, 50, 0, text_x=0, text_y=-25)
+        assert out.split()[2] == "100,00", out
+        return out
+    check("add_dimension horizontal", linear)
+
+    def title():
+        out = json.loads(srv.set_title_block(json.dumps({"title": "Audit block", "part_number": "AUD-1"})))
+        assert out["title"] == "Audit block" and out["part number"] == "AUD-1", out
+        return out
+    check("set_title_block", title)
+
+    def title_unknown():
+        try:
+            srv.set_title_block(json.dumps({"colour": "red"}))
+        except ValueError as exc:
+            return str(exc)[:60]
+        raise AssertionError("unknown title block field accepted")
+    check("set_title_block rejects unknown fields", title_unknown)
+
+    def views():
+        info = json.loads(srv.list_views())
+        assert len(info["views"]) == 4, info["views"]
+        return f"{len(info['views'])} views, {info['dimensions']} dimensions, problems: {info['problems'] or 'none'}"
+    check("list_views", views)
+
+    def png():
+        path = OUT / "audit_drawing.png"
+        out = srv.export_sheet_png(str(path), 1600)
+        assert path.stat().st_size > 10000, "image suspiciously small"
+        return out
+    check("export_sheet_png", png)
+
+    def pdf():
+        path = OUT / "audit_drawing.pdf"
+        out = srv.export_pdf(str(path))
+        assert path.read_bytes()[:5] == b"%PDF-", "not a PDF"
+        return out
+    check("export_pdf", pdf)
+
+    close_active()
+    close_audit_files()
+
+
 def server_only():
     """Tools that live only in server.py."""
     check("execute_python stdout", lambda: _equal(srv.execute_python("print(1 + 1)"), "2"))
@@ -496,7 +628,7 @@ def _equal(actual, expected):
 
 
 def main():
-    for group in (solid_block, revolves, extrude_variants, sheet_metal, server_only):
+    for group in (solid_block, revolves, extrude_variants, sheet_metal, drawing, server_only):
         print(f"\n{group.__name__}: {group.__doc__}", flush=True)
         try:
             group()

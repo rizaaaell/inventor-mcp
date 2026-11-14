@@ -109,6 +109,44 @@ def sheet_metal_case(inv):
     return f"volume {volume:.1f} mm3, flat pattern {flat[0]:.1f} x {flat[1]:.1f} mm"
 
 
+def drawing_case(inv):
+    """A3 drawing of the coupling flange: views, section, dimensions, PDF."""
+    import re
+    out = Path(r"C:\inventor-test\smoke")
+    out.mkdir(parents=True, exist_ok=True)
+    pdf = out / "smoke_drawing.pdf"
+    pdf.unlink(missing_ok=True)
+
+    inv.create_part(name="smoke_drawing_part")
+    part = inv.active_document()
+    build_flange(inv)
+    part_path = out / "smoke_drawing_part.ipt"
+    if part_path.exists():
+        part_path.unlink()
+    part.SaveAs(str(part_path), False)
+
+    inv.create_drawing()
+    drawing = inv.active_document()
+    try:
+        front = inv.add_base_view(str(part_path), 110, 200).split()[2].rstrip(":")
+        top = inv.add_projected_view(front, 110, 80).split()[2]
+        section = inv.add_section_view(front, 0, -70, 0, 70, 250, 200, "A").split()[2]
+        for v in (front, top, section):
+            inv.add_centerlines(v)
+            inv.retrieve_dimensions(v)
+        layout = inv.list_views()
+        inv.export_pdf(str(pdf))
+    finally:
+        drawing.Close(True)
+        part.Close(True)
+    assert [v["name"] for v in layout["views"]] == [front, top, section], layout["views"]
+    assert layout["dimensions"] == 8, f"{layout['dimensions']} dimensions, expected 8"
+    assert not layout["problems"], layout["problems"]
+    box = re.search(rb"/MediaBox\s*\[0 0 (\d+) (\d+)\]", pdf.read_bytes())
+    assert box and (int(box.group(1)), int(box.group(2))) == (1191, 842), "PDF is not one A3 landscape page"
+    return f"3 views, 8 dimensions, no layout problems, A3 PDF {pdf.stat().st_size} bytes"
+
+
 def volume_case(build):
     def case(inv):
         inv.create_part(name="smoke_volume")
@@ -150,6 +188,7 @@ CASES = [
     ("fillet_block", volume_case(build_filleted_block)),
     ("tapped_hole_m10", volume_case(build_tapped_plate)),
     ("sheet_metal_flange", sheet_metal_case),
+    ("flange_drawing", drawing_case),
     ("pinned_document", pinned_document_case),
 ]
 
