@@ -78,9 +78,7 @@ def close_active():
 
 def close_audit_files():
     """Close documents opened from OUT, e.g. the model a drawing view loaded."""
-    for doc in list(srv.inv.app.Documents):
-        if doc.FullFileName and Path(doc.FullFileName).parent == OUT:
-            doc.Close(True)
+    srv.inv.close_documents_in(str(OUT))
 
 
 def sketch_point_for_world(x, y, z):
@@ -820,6 +818,22 @@ def assembly():
         assert kinds == ["insert", "angle", "mate", "tangent", "flush"], kinds
         return out
     check("save_document writes the constraint log", save_log)
+
+    def assembly_drawing():
+        srv.create_drawing()
+        srv.add_base_view(str(OUT / "audit_assembly.iam"), 150, 200, 0.5, design_view="Default")
+        out = srv.add_section_view("VIEW1", -160, 0, 160, 0, 150, 120, "A", no_hatch="audit_pin:1")
+        assert "unhatched: audit_pin:1" in out, out
+        parts = srv.add_parts_list("A")
+        assert "4 items" in parts, parts
+        balloons = srv.add_balloons("A")
+        n = int(balloons.split()[0])
+        assert n >= 2, balloons
+        problems = json.loads(srv.list_views())["problems"]
+        assert not problems, problems
+        srv.inv.active_document().Close(True)
+        return f"{parts} | {balloons}"
+    check("assembly drawing: design view, no_hatch, parts list, balloons", assembly_drawing)
     close_audit_files()
 
 

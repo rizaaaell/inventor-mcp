@@ -132,9 +132,9 @@ Uji penerimaan: bangun ulang kopling flens hanya dengan tool fase ini, tanpa `ex
 
 ## Fase 4 — Drawing assembly
 
-* \[ ] `add\_parts\_list(view, x, y)` — `Sheet.PartsLists.Add`.
-* \[ ] `add\_balloons(view)` — balloon otomatis per komponen, posisi tidak bertumpuk.
-* \[ ] `add\_base\_view` mendukung assembly dan representasi (view rep).
+* \[x] `add\_parts\_list(view, x, y)` — `Sheet.PartsLists.Add`.
+* \[x] `add\_balloons(view)` — balloon otomatis per komponen, posisi tidak bertumpuk.
+* \[x] `add\_base\_view` mendukung assembly dan representasi (view rep).
 
 Uji penerimaan: drawing assembly kopling A3 dengan front view, section melalui sumbu, parts list, balloon untuk setiap komponen, PDF.
 
@@ -177,3 +177,4 @@ Diisi oleh sesi Claude Code setiap akhir fase. Entri terbaru di bawah.
 |2026-11-14|3|Menunggu konfirmasi|9 tool assembly baru (66 total): create_assembly, place_component, list_occurrences, list_occurrence_geometry, add_constraint (mate/flush/insert/angle/tangent), get_dof, get_bom, analyze_interference, pattern_component. Pencarian geometri lewat selector di koordinat part (plane:/axis:/circle:/face:/cylinder:/edge:), bukan tool find_occurrence_* terpisah. Uji penerimaan experiments/assembly_coupling_tools.py: Kopling_Flens_tools.iam, 20 komponen, 38 constraint, BOM 2/2/4/4/8, DOF semua 0, interferensi hanya 4 pasang baut-mur 187,51 mm³ ditandai artefak ulir; urutan constraint di Kopling_Flens_tools.constraints.json. Audit 101 PASS, smoke 8/8.|
 |2026-11-14|3|Menunggu konfirmasi|Revisi atas masukan Rizal: pengencang kopling diambil dari Content Center (DIN 933 M10x60, DIN 934 M10, DIN 125-1 A 10,5; file dibuat di folder Content Center project aktif atas persetujuan Rizal), satu set baut di lubang +X lalu pattern_component 4x mengelilingi sumbu flens. Tool baru list_content_center dan place_content_center (68 total). Artefak ulir kini hanya untuk pasangan lubang tap vs part ber-ulir; lubang tap tanpa pasangan ber-ulir ditandai 'likely'. Hasil: BOM 2/2/4/4/8, DOF semua 0, interferensi hanya 4 baut-mur 176,85 mm³ (artefak ulir). Audit 103 PASS, smoke 8/8.|
 |2026-11-14|3|Selesai|Rizal mengonfirmasi hasil kopling. Fase 3 ditutup dengan 11 tool assembly (68 total): assembly, selector geometri, constraint dengan log urutan, DOF, BOM, interferensi dengan deteksi artefak ulir, pattern, dan Content Center. Audit 103 PASS, smoke 8/8. Sisa: nama constraint panjang untuk part Content Center; sketch Flens.ipt masih tampil di assembly.|
+|2026-11-14|4|Menunggu konfirmasi|Tool baru add_parts_list dan add_balloons; add_base_view menerima design_view/positional; add_section_view menerima no_hatch (poros tanpa arsir, karena API tidak punya section participation per komponen). 70 tool. Uji penerimaan experiments/drawing_coupling.py: Kopling_Flens_A3.idw + PDF, front view, section A-A lewat sumbu dan dua baut, iso, parts list di atas title block gaya Arjuna, 5 balloon tanpa leader bersilangan, list_views tanpa masalah. Ditemukan dan diperbaiki: menutup part yang masih dipakai assembly memunculkan dialog 'improper argument' lalu crash; pembersihan di audit, smoke, dan eksperimen kini lewat close_documents_in. Audit 104 PASS, smoke 8/8 dua kali berturut-turut.|

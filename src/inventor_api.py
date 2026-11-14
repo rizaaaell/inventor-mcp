@@ -1536,11 +1536,46 @@ class InventorConnection:
             other = views.Item(i)
             if other.Name != view.Name and self._overlap(rect, self._view_rect(other)):
                 problems.append(f"overlaps view {other.Name} ({self._fmt_rect(self._view_rect(other))})")
+        for i in range(1, sheet.PartsLists.Count + 1):
+            if self._overlap(rect, self._rect(sheet.PartsLists.Item(i))):
+                problems.append(f"overlaps the parts list ({self._fmt_rect(self._rect(sheet.PartsLists.Item(i)))})")
         if problems:
             view.Delete()
             raise ValueError(f"View would sit at {self._fmt_rect(rect)}: {'; '.join(problems)}. "
                              "Move it or change the scale.")
         return rect
+
+    def close_documents_in(self, folder: str) -> list[str]:
+        """Close every open document saved in folder, drawings and assemblies first.
+
+        Closing a part that an open assembly or drawing still uses makes Inventor show an
+        "improper argument" dialog; while it is up, later Close calls are ignored, and
+        closing more referenced files can crash Inventor. Unsaved changes are discarded.
+        """
+        folder = os.path.normcase(os.path.abspath(folder))
+
+        def inside():
+            out = []
+            for i in range(1, self.app.Documents.Count + 1):
+                d = self.app.Documents.Item(i)
+                if d.FullFileName and os.path.normcase(os.path.dirname(d.FullFileName)) == folder:
+                    out.append(d)
+            return out
+
+        closed = []
+        while docs := inside():
+            top = [d for d in docs if d.ReferencingDocuments.Count == 0]
+            if not top:
+                users = {d.ReferencingDocuments.Item(i).FullFileName or d.ReferencingDocuments.Item(i).DisplayName
+                         for d in docs for i in range(1, d.ReferencingDocuments.Count + 1)}
+                raise RuntimeError(f"Documents in {folder} are still used by {sorted(users)}; close those first")
+            for d in top:
+                name = d.FullFileName
+                d.Close(True)
+                if any(o.FullFileName == name for o in inside()):
+                    raise RuntimeError(f"Inventor did not close {name}; a dialog may be open in Inventor")
+                closed.append(os.path.basename(name))
+        return closed
 
     def _open_model(self, model_path: str):
         path = os.path.abspath(model_path)
@@ -1559,15 +1594,30 @@ class InventorConnection:
         return value
 
     def add_base_view(self, model_path: str, x: float, y: float, scale: float = 1.0,
-                      orientation: str = "front", style: str = "visible") -> str:
+                      orientation: str = "front", style: str = "visible",
+                      design_view: str = "", positional: str = "") -> str:
         sheet = self.active_drawing().ActiveSheet
         orient = self._VIEW_ORIENTATIONS.get(orientation.lower())
         if orient is None:
             raise ValueError(f"Unknown orientation {orientation}. Use {', '.join(self._VIEW_ORIENTATIONS)}.")
         model = self._open_model(model_path)
+        options = None
+        if design_view or positional:
+            if model.DocumentType != 12291:
+                raise ValueError("design_view and positional apply to assemblies only")
+            reps = model.ComponentDefinition.RepresentationsManager
+            options = self.app.TransientObjects.CreateNameValueMap()
+            for key, name, collection in (("DesignViewRepresentation", design_view, reps.DesignViewRepresentations),
+                                          ("PositionalRepresentation", positional, reps.PositionalRepresentations)):
+                if not name:
+                    continue
+                names = [collection.Item(i).Name for i in range(1, collection.Count + 1)]
+                if name not in names:
+                    raise ValueError(f"No {key} {name!r} in {model.DisplayName}: {names}")
+                options.Add(key, name)
         first = sheet.DrawingViews.Count == 0
         view = sheet.DrawingViews.AddBaseView(
-            model, self._sheet_point(x, y), scale, orient, self._style(style))
+            model, self._sheet_point(x, y), scale, orient, self._style(style), "", None, options)
         rect = self._place_check(sheet, view)
         note = ""
         if first:
@@ -1600,8 +1650,10 @@ class InventorConnection:
         return f"Projected view {view.Name} from {parent}: {self._fmt_rect(rect)}"
 
     def add_section_view(self, parent: str, x1: float, y1: float, x2: float, y2: float,
-                         x: float, y: float, label: str = "A", style: str = "from_base") -> str:
-        """Section line from (x1, y1) to (x2, y2) in the parent view, view placed at (x, y)."""
+                         x: float, y: float, label: str = "A", style: str = "from_base",
+                         no_hatch: str = "") -> str:
+        """Section line from (x1, y1) to (x2, y2) in the parent view, view placed at (x, y).
+        no_hatch: assembly components drawn unhatched, e.g. shafts cut along their axis."""
         sheet = self.active_drawing().ActiveSheet
         parent_view = self._view(parent)
         sketch = parent_view.Sketches.Add()
@@ -1622,7 +1674,28 @@ class InventorConnection:
             except Exception:
                 pass
             raise
-        return f"Section view {view.Name} from {parent}: {self._fmt_rect(rect)}"
+        hidden = self._hide_hatch(view, no_hatch) if no_hatch else ""
+        return f"Section view {view.Name} from {parent}: {self._fmt_rect(rect)}{hidden}"
+
+    def _hide_hatch(self, view, occurrences: str) -> str:
+        # The API has no per-component section participation. A part cut along its axis has
+        # the same outline either way, so hiding its hatch draws it as unsectioned.
+        names = re.findall(r"\s*(.+?:\d+)\s*(?:,|$)", occurrences)
+        hidden = set()
+        regions = view.HatchRegions
+        for i in range(1, regions.Count + 1):
+            region = regions.Item(i)
+            try:
+                occ = region.SurfaceBody.ContainingOccurrence
+            except Exception:
+                continue
+            if occ is not None and any(self._same_name(occ.Name, n) for n in names):
+                region.Visible = False
+                hidden.add(occ.Name)
+        missing = [n for n in names if not any(self._same_name(h, n) for h in hidden)]
+        if missing:
+            raise ValueError(f"No hatch in view {view.Name} for {missing}")
+        return f"; unhatched: {', '.join(sorted(hidden))}"
 
     def add_detail_view(self, parent: str, cx: float, cy: float, radius: float,
                         x: float, y: float, scale: float = 2.0, label: str = "B",
@@ -1679,13 +1752,28 @@ class InventorConnection:
                 pass
         for label, collection in (("feature control frame", sheet.FeatureControlFrames),
                                   ("symbol", sheet.SketchedSymbols),
-                                  ("surface finish", sheet.SurfaceTextureSymbols)):
+                                  ("surface finish", sheet.SurfaceTextureSymbols),
+                                  ("parts list", sheet.PartsLists)):
             for i in range(1, collection.Count + 1):
                 try:
                     boxes.append((f"{label} {i}", self._rect(collection.Item(i))))
                 except Exception:
                     pass
+        balloons = sheet.Balloons
+        for i in range(1, balloons.Count + 1):  # balloons have no RangeBox
+            b = balloons.Item(i)
+            r = self._balloon_diameter(b.Style) / 2
+            x, y = b.Position.X * 10, b.Position.Y * 10
+            boxes.append((f"balloon {b.BalloonValueSets.Item(1).ItemNumber}", (x - r, y - r, x + r, y + r)))
         return boxes
+
+    @staticmethod
+    def _balloon_diameter(style) -> float:
+        # Scaled to text height the circle measures 3x the text height (10.5 mm for 3.5 mm
+        # text), not BalloonDiameter.
+        if style.ScaleToTextHeight:
+            return 3 * style.TextStyle.FontSize * 10
+        return style.BalloonDiameter * 10
 
     def _dimension_boxes(self, sheet):
         boxes = []
@@ -2830,3 +2918,162 @@ class InventorConnection:
         step = angle / count if abs(angle - 360) < 1e-9 else angle / max(count - 1, 1)
         pattern = ad.OccurrencePatterns.AddCircularPattern(col, axis_entity, True, math.radians(step), count)
         return f"Pattern {pattern.Name}: {count} x [{occurrences}] every {step:g} deg"
+
+    # ---------- Assembly drawings ----------
+
+    _PARTS_LIST_LEVELS = {"parts": 46594, "structured": 46593, "all_levels": 46595}
+    _ARROWHEADS = {"filled": 71941, "closed": 71940, "open": 71938, "dot": 71949, "none": 71948}
+
+    def _view_curves(self, view, occurrence):
+        """Drawing curves of one assembly component in a view."""
+        # DrawingCurves takes the component as an argument of a property get, which late
+        # binding cannot call directly.
+        dispid = view._oleobj_.GetIDsOfNames("DrawingCurves")
+        curves = win32com.client.Dispatch(
+            view._oleobj_.Invoke(dispid, 0, pythoncom.DISPATCH_PROPERTYGET, True, occurrence))
+        return [curves.Item(i) for i in range(1, curves.Count + 1)]
+
+    def add_parts_list(self, view: str, x: float = 0, y: float = 0, level: str = "parts") -> str:
+        """Parts list of the view's assembly. Without x, y it sits on the title block, flush
+        with the right border, as in the Arjuna drawings. (x, y) is its top right corner."""
+        doc = self.active_drawing()
+        sheet = doc.ActiveSheet
+        v = self._view(view)
+        lvl = self._PARTS_LIST_LEVELS.get(level.lower())
+        if lvl is None:
+            raise ValueError(f"level must be one of {', '.join(self._PARTS_LIST_LEVELS)}")
+        pl = sheet.PartsLists.Add(v, self._sheet_point(x or 400, y or 200), lvl)
+        settings = self._profile_of(doc).get("parts_list", {})
+        heading = {"top": 46337, "bottom": 46338, "none": 46339}.get(settings.get("heading", ""))
+        if heading:
+            pl.HeadingPlacement = heading
+        cols = pl.PartsListColumns
+        widths = {k.upper(): w for k, w in settings.get("widths", {}).items()}
+        for i in range(1, cols.Count + 1):
+            if cols.Item(i).Title.upper() in widths:
+                cols.Item(i).Width = widths[cols.Item(i).Title.upper()] / 10.0
+        r = self._rect(pl)
+        if not (x or y):
+            area = self._drawing_area(sheet)
+            bottom = self._rect(sheet.TitleBlock)[3] if sheet.TitleBlock is not None else area[1]
+            x, y = area[2], bottom + (r[3] - r[1])
+        pl.Position = self._sheet_point(x, y)
+        r = self._rect(pl)
+        clashes = [o.Name for o in (sheet.DrawingViews.Item(i) for i in range(1, sheet.DrawingViews.Count + 1))
+                   if self._overlap(r, self._view_rect(o))]
+        rows = pl.PartsListRows
+        items = [f"{rows.Item(i).Item(1).Value}: {rows.Item(i).Item(3).Value} x{rows.Item(i).Item(2).Value}"
+                 for i in range(1, rows.Count + 1)]
+        warn = f"; overlaps view {', '.join(clashes)}" if clashes else ""
+        return f"Parts list {self._fmt_rect(r)}, {len(items)} items: {'; '.join(items)}{warn}"
+
+    def add_balloons(self, view: str, gap: float = 12) -> str:
+        """One balloon per parts list item visible in the view, in a row above or below it.
+
+        Each balloon points at the longest edge that no other component shares, on the
+        instance with the most edges in the view; balloons keep the x order of those points
+        so leaders do not cross.
+        gap: distance in mm between the view box and the balloon row.
+        """
+        doc = self.active_drawing()
+        sheet = doc.ActiveSheet
+        v = self._view(view)
+        model = v.ReferencedDocumentDescriptor.ReferencedDocument
+        if model.DocumentType != 12291:
+            raise ValueError(f"View {view} shows a part; balloons need an assembly view")
+        occs = model.ComponentDefinition.Occurrences
+        best = {}  # file -> (curve count, occurrence, curves)
+        geometry = []  # (occurrence name, line ends or (center, radius)) of every visible edge
+        for i in range(1, occs.Count + 1):
+            o = occs.Item(i)
+            try:
+                curves = self._view_curves(v, o)
+            except Exception:
+                continue
+            for c in curves:
+                for j in range(1, c.Segments.Count + 1):
+                    g = c.Segments.Item(j).Geometry
+                    try:
+                        geometry.append((o.Name, "arc", (g.Center.X, g.Center.Y), g.Radius, c))
+                        continue
+                    except Exception:
+                        pass
+                    try:
+                        geometry.append((o.Name, "line", (g.StartPoint.X, g.StartPoint.Y),
+                                         (g.EndPoint.X, g.EndPoint.Y), c))
+                    except Exception:
+                        pass  # ellipses and splines (chamfers seen edge-on) are skipped
+            key = os.path.normcase(o.ReferencedDocumentDescriptor.FullDocumentName)
+            if curves and len(curves) > best.get(key, (0,))[0]:
+                best[key] = (len(curves), o, curves)
+
+        def distance(px, py, kind, a, b):
+            if kind == "arc":
+                return abs(((px - a[0]) ** 2 + (py - a[1]) ** 2) ** 0.5 - b)
+            vx, vy = b[0] - a[0], b[1] - a[1]
+            t = max(0.0, min(1.0, ((px - a[0]) * vx + (py - a[1]) * vy) / ((vx * vx + vy * vy) or 1e-12)))
+            return ((px - a[0] - t * vx) ** 2 + (py - a[1] - t * vy) ** 2) ** 0.5
+
+        targets = []
+        for key, (_, occ, curves) in best.items():
+            # The longest straight edge whose midpoint no other component's edge touches,
+            # so the arrow cannot be read as pointing at a neighbour (bolt head vs washer).
+            own = [g for g in geometry if g[0] == occ.Name and g[1] == "line"]
+            others = [g for g in geometry if g[0] != occ.Name]
+            choice, fallback = None, None
+            for _, _, a, b, c in sorted(own, key=lambda g: -((g[3][0] - g[2][0]) ** 2 + (g[3][1] - g[2][1]) ** 2)):
+                mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+                fallback = fallback or (c, mid)
+                if all(distance(mid[0], mid[1], k, oa, ob) > 0.03 for _, k, oa, ob, _ in others):
+                    choice = (c, mid)
+                    break
+            curve, foot = choice or fallback or (curves[0], (curves[0].StartPoint.X, curves[0].StartPoint.Y))
+            targets.append((occ, curve, foot[0] * 10, foot[1] * 10))
+        if not targets:
+            raise ValueError(f"No components visible in view {view}")
+
+        box = self._view_rect(v)
+        cy = (box[1] + box[3]) / 2
+        area = self._drawing_area(sheet)
+        diameter = self._balloon_diameter(
+            doc.StylesManager.ActiveStandardStyle.ActiveObjectDefaults.BalloonStyle)
+        step = diameter + 4
+        label = self._rect(v.Label) if v.ShowLabel else None
+        placed = []
+        for row in ("above", "below"):
+            group = sorted((t for t in targets if (t[3] >= cy) == (row == "above")), key=lambda t: t[2])
+            if not group:
+                continue
+            xs = [t[2] for t in group]
+            for k in range(1, len(xs)):  # spread to the right, then shift back to centre
+                xs[k] = max(xs[k], xs[k - 1] + step)
+            shift = (sum(t[2] for t in group) - sum(xs)) / len(xs)
+            xs = [x + shift for x in xs]
+            y = box[3] + gap + diameter / 2 if row == "above" else box[1] - gap - diameter / 2
+            on_label_side = label is not None and ((label[1] >= cy) == (row == "above"))
+            if on_label_side:
+                # Leaders from a row past the label would cross its text, so the row sits
+                # level with the label and the balloons step aside of it, keeping their order.
+                y = (label[1] + label[3]) / 2
+                left_edge, right_edge = label[0] - diameter / 2 - 3, label[2] + diameter / 2 + 3
+                mid = (label[0] + label[2]) / 2
+                left = [k for k, x in enumerate(xs) if x < mid]
+                right = [k for k, x in enumerate(xs) if x >= mid]
+                limit = left_edge + step
+                for k in reversed(left):
+                    xs[k] = limit = min(xs[k], limit - step)
+                limit = right_edge - step
+                for k in right:
+                    xs[k] = limit = max(xs[k], limit + step)
+            xs = [min(max(x, area[0] + step), area[2] - step) for x in xs]
+            for (occ, curve, fx, fy), bx in zip(group, xs):
+                points = self.app.TransientObjects.CreateObjectCollection()
+                points.Add(self._sheet_point(bx, y))
+                points.Add(sheet.CreateGeometryIntent(curve, self._sheet_point(fx, fy)))
+                balloon = sheet.Balloons.Add(points)
+                arrow = self._ARROWHEADS.get(self._profile_of(doc).get("balloon_arrowhead", ""))
+                if arrow:
+                    balloon.Leader.ArrowheadType = arrow
+                item = balloon.BalloonValueSets.Item(1).ItemNumber
+                placed.append((int(item) if str(item).isdigit() else 0, f"{item} {occ.Name} at ({bx:.0f}, {y:.0f})"))
+        return f"{len(placed)} balloons on {view}: " + "; ".join(p for _, p in sorted(placed))

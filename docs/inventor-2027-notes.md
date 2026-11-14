@@ -306,6 +306,47 @@ Verified while building the phase 3 tools (2027.1):
   24017 M10  x 60:1", "DIN 125-1 A A 10,5:1". They contain commas and doubled spaces,
   so the wrapper matches names with collapsed whitespace and splits name lists on ":n".
 
+## Assembly drawings
+
+- `DrawingViews.AddBaseView(model, point, scale, orientation, style, ModelViewName,
+  ArbitraryCamera, AdditionalOptions)`: a design view or positional representation goes in
+  AdditionalOptions as `"DesignViewRepresentation"` / `"PositionalRepresentation"`
+  (a NameValueMap); pass `""` and `None` for the two before it.
+- `view.DrawingCurves(occurrence)` gives one component's curves, but late binding raises
+  "Type mismatch" on the call. Invoke the property get with the occurrence as argument
+  (`_oleobj_.Invoke(dispid, 0, DISPATCH_PROPERTYGET, True, occ)`). Pattern instances
+  have curves like placed components.
+- Section views of an assembly hatch each component with its own angle (45°, 135°, 60°,
+  120°, ...). Content Center parts are left unhatched by default
+  (`StandardPartsSectionBehavior` = `kObeyBrowserSettingsSectionStandardParts` 66563;
+  `kNever...` 66562, `kAlways...` 66561).
+- The API has no per-component section participation. `view.HatchRegions` items have
+  `SurfaceBody.ContainingOccurrence` and a settable `Visible`; hiding the hatch of a
+  shaft cut along its axis draws it the same as an unsectioned shaft.
+- `PartsLists.Add(view, point, Level)`: the point becomes the parts list's top right
+  corner (`Position`). Level `kPartsOnly` 46594, `kStructured` 46593, `kStructuredAllLevels`
+  46595. `HeadingPlacement` 46337 top, 46338 bottom; the instance came out at the top
+  although the ISO style says bottom, so it is set on the instance. Column `Width` is
+  settable (cm). The Arjuna template uses `Parts List (ISO)`.
+- `Balloons.Add(LeaderPoints)`: item 1 is the balloon centre (Point2d), the last item a
+  GeometryIntent. As with leaders, the intent needs the point on the curve or the arrow
+  lands at the curve start. Item numbers follow the BOM, so add the parts list first.
+- Balloons have no `RangeBox`. With `ScaleToTextHeight` the circle measures 3x the text
+  height (10.5 mm for 3.5 mm text), not `BalloonDiameter` (5.25 in `Balloon (ISO)`).
+- `balloon.Leader.ArrowheadType` sets the leader end (`kFilledArrowheadType` 71941,
+  `kSmallDotArrowheadType` 71949, `kNoneArrowheadType` 71948).
+- Curve segments of a component seen edge-on can be neither lines nor arcs (chamfer
+  ellipses); they have no `StartPoint` under late binding.
+
+## Closing documents
+
+- `Document.Close` on a part an open assembly or drawing still uses shows an
+  "Encountered an improper argument" dialog. While it is up, further `Close` calls return
+  without error and do nothing, so the documents stay open hidden; closing more referenced
+  files then crashed Inventor (access violation c0000005). Close drawings and assemblies
+  first: `inv.close_documents_in(folder)` closes the documents of a folder whose
+  `ReferencingDocuments` is empty, repeats, and raises if a `Close` was ignored.
+
 ## Wrapper fixes in phase 1
 
 - **Tools followed the active tab.** Activating another document between two calls

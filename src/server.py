@@ -617,7 +617,8 @@ def create_drawing(profile: str = "default", template: str = "", sheet_size: str
 
 @mcp.tool()
 def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
-                  orientation: str = "front", style: str = "visible") -> str:
+                  orientation: str = "front", style: str = "visible",
+                  design_view: str = "", positional: str = "") -> str:
     """Place the first view of a part or assembly file, centered at (x, y) on the sheet.
     A view that would leave the border or overlap the title block or another view is
     removed again and an error says why.
@@ -629,8 +630,10 @@ def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
         orientation: front, top, right, back, bottom, left, iso_top_right, iso_top_left,
                      iso_bottom_right, iso_bottom_left. "front" looks along the part's -Z axis.
         style: visible (hidden lines removed), hidden (hidden lines shown), shaded, shaded_hidden.
+        design_view: assembly design view representation to show, e.g. "Default".
+        positional: assembly positional representation to show.
     """
-    return inv.add_base_view(model_path, x, y, scale, orientation, style)
+    return inv.add_base_view(model_path, x, y, scale, orientation, style, design_view, positional)
 
 
 @mcp.tool()
@@ -649,7 +652,8 @@ def add_projected_view(parent: str, x: float, y: float, style: str = "from_base"
 
 @mcp.tool()
 def add_section_view(parent: str, x1: float, y1: float, x2: float, y2: float,
-                     x: float, y: float, label: str = "A", style: str = "from_base") -> str:
+                     x: float, y: float, label: str = "A", style: str = "from_base",
+                     no_hatch: str = "") -> str:
     """Section view cut along the line (x1, y1)-(x2, y2) of the parent view, centered at (x, y).
 
     Args:
@@ -659,8 +663,11 @@ def add_section_view(parent: str, x1: float, y1: float, x2: float, y2: float,
         x, y: section view center on the sheet, mm. It stays aligned with the parent.
         label: section letter, e.g. "A" for A-A.
         style: from_base, visible, hidden, shaded, shaded_hidden.
+        no_hatch: assembly components to draw unhatched, comma-separated, e.g.
+                  "Poros:1, Poros:2" for shafts cut along their axis. Content Center
+                  fasteners are left unhatched by Inventor already.
     """
-    return inv.add_section_view(parent, x1, y1, x2, y2, x, y, label, style)
+    return inv.add_section_view(parent, x1, y1, x2, y2, x, y, label, style, no_hatch)
 
 
 @mcp.tool()
@@ -1014,6 +1021,34 @@ def pattern_component(occurrences: str, axis_occurrence: str, axis: str, count: 
         angle: total span in degrees; 360 spreads them evenly around.
     """
     return inv.pattern_component(occurrences, axis_occurrence, axis, count, angle)
+
+
+@mcp.tool()
+def add_parts_list(view: str, x: float = 0, y: float = 0, level: str = "parts") -> str:
+    """Parts list (ITEM, QTY, PART NUMBER, DESCRIPTION) of an assembly view.
+
+    Args:
+        view: name of a view of the assembly.
+        x, y: top right corner on the sheet, mm. Leave both 0 to stack it on the title
+              block against the right border, as the Arjuna drawings do.
+        level: parts (parts only), structured (first level) or all_levels.
+    """
+    return inv.add_parts_list(view, x, y, level)
+
+
+@mcp.tool()
+def add_balloons(view: str, gap: float = 12) -> str:
+    """Balloon every parts list item that is visible in an assembly view.
+
+    Balloons go in a row above the view for components in its upper half and below it
+    for the lower half, sorted so leaders do not cross. Add the parts list first so the
+    item numbers match it. Check the result with list_views or export_sheet_png.
+
+    Args:
+        view: name of a view of the assembly.
+        gap: distance from the view box to the balloon row, mm.
+    """
+    return inv.add_balloons(view, gap)
 
 
 def main():

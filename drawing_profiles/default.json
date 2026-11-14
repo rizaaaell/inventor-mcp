@@ -30,5 +30,15 @@
     ".XXX": "0,05",
     "ANGULAR": "1°"
   },
-  "centerline_line_type": "chain"
+  "centerline_line_type": "chain",
+  "parts_list": {
+    "heading": "bottom",
+    "widths": {
+      "ITEM": 15,
+      "QTY": 12,
+      "PART NUMBER": 55,
+      "DESCRIPTION": 55
+    }
+  },
+  "balloon_arrowhead": "filled"
 }

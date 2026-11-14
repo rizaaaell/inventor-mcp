@@ -197,9 +197,7 @@ def assembly_case(inv):
     """Pin inserted into a holed disk: fully constrained, BOM counts, no interference."""
     out = Path(r"C:\inventor-test\smoke")
     out.mkdir(parents=True, exist_ok=True)
-    for doc in list(inv.app.Documents):
-        if doc.FullFileName and Path(doc.FullFileName).parent == out:
-            doc.Close(True)
+    inv.close_documents_in(str(out))
     parts = {}
     for name, sizes in (("smoke_disk", ((60, 10), (10, -10))), ("smoke_pin", ((10, 30),))):
         inv.create_part(name=name)
@@ -227,13 +225,25 @@ def assembly_case(inv):
         assert bom == {"smoke_disk.ipt": 1, "smoke_pin.ipt": 2}, bom
         clashes = inv.analyze_interference()
         assert not clashes, clashes
-        return f"3 components, DOF 0, BOM {bom}"
+        iam = out / "smoke_assembly.iam"
+        inv.save_document(str(iam))
+        inv.create_drawing()
+        drawing = inv.active_document()
+        try:
+            inv.add_base_view(str(iam), 100, 200, 1)
+            inv.add_section_view("VIEW1", -40, 0, 40, 0, 100, 110, "A")
+            parts_list = inv.add_parts_list("A")
+            balloons = inv.add_balloons("A")
+            assert "2 items" in parts_list, parts_list
+            assert balloons.startswith("2 balloons"), balloons
+            problems = inv.list_views()["problems"]
+            assert not problems, problems
+        finally:
+            drawing.Close(True)
+        return f"3 components, DOF 0, BOM {bom}, parts list and 2 balloons"
     finally:
         assembly.Close(True)
-        for path in parts.values():
-            for doc in list(inv.app.Documents):
-                if doc.FullFileName.lower() == path.lower():
-                    doc.Close(True)
+        inv.close_documents_in(str(out))
 
 
 CASES = [

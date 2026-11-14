@@ -49,9 +49,9 @@ def constrain(*args, **kwargs):
 
 
 print(srv.connect())
-for doc in list(srv.inv.app.Documents):
-    if doc.FullFileName.lower() == str(OUT).lower():
-        doc.Close(True)  # a previous run's assembly would block the save
+# A previous run's assembly would block the save; its drawing goes first since it uses it.
+srv.inv.close_documents_in(r"C:\inventor-test\drawing")
+srv.inv.close_documents_in(str(PART_DIR))
 print(srv.create_assembly())
 print(srv.transaction("begin", "Coupling from tools"))
 try:

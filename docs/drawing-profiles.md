@@ -28,6 +28,9 @@ standard; no code change or server restart is needed.
 | `title_block_aliases` | names people use for a field the title block calls otherwise, e.g. `"APPROVED BY": "CHECKED BY"` in the Arjuna block |
 | `title_block_defaults` | values filled into empty fields when the first view is placed, e.g. `"DOCUMENT TYPE": "ENGINEERING DRAWING"` |
 | `general_tolerances` | values written after each "=±" of the title block's TOLERANCES OTHERWISE NOTED text, e.g. `{".X": "0,2", ".XX": "0,1", ".XXX": "0,05", "ANGULAR": "1°"}` |
+| `parts_list.heading` | `bottom` (ITEM, QTY, PART NUMBER, DESCRIPTION headings under the rows and PARTS LIST below them, as in the Arjuna assembly drawings), `top` or `none` |
+| `parts_list.widths` | column widths in mm by heading, e.g. `{"ITEM": 15, "QTY": 12}` |
+| `balloon_arrowhead` | leader end of balloons: `filled`, `closed`, `open`, `dot` or `none`; empty keeps the balloon style's |
 
 Label texts use Inventor's tokens: `<DrawingViewName/>`, `<DrawingViewScale/>`,
 `<DrawingViewSheetName/>`, `<DrawingViewSheetIndex/>`, `<DrawingViewSheetZone/>`
