@@ -173,7 +173,7 @@ Diisi oleh sesi Claude Code setiap akhir fase. Entri terbaru di bawah.
 |2026-11-14|2|Menunggu konfirmasi|Revisi kelima: top view dengan garis tersembunyi (lubang dan bore); lokasi lubang lewat PCD Ø90 basic dan sudut 90° basic, dirujuk oleh position Ø0,2 A B; add_dimension kind 'angle'. Audit 86 PASS, smoke 7/7.|
 |2026-11-14|2|Menunggu konfirmasi|Revisi keenam: garis sumbu dan lingkaran PCD jadi titik-strip (layer centerline ISO menggambar lingkaran sebagai strip biasa yang mirip hidden line); PCD masuk ke hole note '4x Ø11 THRU / EQ SP ON PCD Ø90' dengan frame position di bawahnya; chamfer jadi catatan '2x 1 X 45°' (tool add_chamfer_note). Audit 87 PASS, smoke 7/7.|
 |2026-11-14|2|Menunggu konfirmasi|Revisi ketujuh: center mark setiap lubang dan lingkaran utama diperpanjang melewati tepi lingkaran (center mark pola otomatis yang terkunci diganti center mark biasa); top view mendapat sumbu lubang tersembunyi. Audit 87 PASS, smoke 7/7.|
-|2026-11-14|2|Selesai|Rizal mengonfirmasi tampilan Flens_A3.pdf. Fase 2 ditutup dengan 26 tool drawing (56 total), profil drawing Arjuna, template Arjuna A3 hasil migrasi dengan style Arjuna Fix, audit 87 PASS, smoke 7/7. Sisa: style .styxml belum diimpor ke template A4/A2/portrait; teks Ra 1,6 sedikit menimpa arsiran.|
+|2026-11-14|2|Selesai|Rizal mengonfirmasi tampilan Flens_A3.pdf. Fase 2 ditutup dengan 21 tool drawing (57 total), profil drawing Arjuna, template Arjuna A3 hasil migrasi dengan style Arjuna Fix, audit 87 PASS, smoke 7/7. Sisa: style .styxml belum diimpor ke template A4/A2/portrait; teks Ra 1,6 sedikit menimpa arsiran.|
 
 
 
