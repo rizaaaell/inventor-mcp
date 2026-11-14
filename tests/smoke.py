@@ -1,4 +1,4 @@
-"""Smoke regression: build two parts in a running Inventor and check their volume.
+"""Smoke regression: build parts in a running Inventor and check volume and key sizes.
 
 Run from the repo root:  python -X utf8 tests/smoke.py
 Exits 1 if any case fails. Parts are closed without saving.
@@ -60,6 +60,55 @@ def build_flange(inv):
     )
 
 
+def build_filleted_block(inv):
+    """100x100x20 block, R5 fillet on the four vertical edges."""
+    inv.create_sketch("XY")
+    inv.draw_rectangle(0, 0, 100, 100)
+    inv.extrude(20)
+    corners = [inv.find_edge(x=sx * 50, y=sy * 50, z=10) for sx in (1, -1) for sy in (1, -1)]
+    inv.fillet(5, corners)
+    return 100 * 100 * 20 - 4 * (1 - math.pi / 4) * 5**2 * 20
+
+
+def build_tapped_plate(inv):
+    """30x30x8 plate with a through M10x1.5 tapped hole."""
+    inv.create_sketch("XY")
+    inv.draw_rectangle(0, 0, 30, 30)
+    inv.extrude(8)
+    inv.hole(0, 0, 10, 0, tapped=True)
+    minor = 10 - 1.082532 * 1.5  # ISO 965 internal thread minor diameter, 8.376 mm
+    return 30 * 30 * 8 - cylinder_volume(minor, 8)
+
+
+def sheet_metal_case(inv):
+    """100x60x2 plate with a 30 mm flange, then a flat pattern.
+
+    Expected values come from the Default_mm sheet metal style in 2027.1
+    (bend radius and K-factor), recorded during the phase 1 audit.
+    """
+    inv.create_part(name="smoke_sheet", template="sheet_metal")
+    doc = inv.active_document()
+    try:
+        inv.set_sheet_metal_thickness(2)
+        inv.create_sketch("XY")
+        inv.draw_rectangle(0, 0, 100, 60)
+        inv.sheet_metal_face()
+        inv.flange([inv.find_edge(x=0, y=-30, z=2)], 30, 90)
+        c = doc.ComponentDefinition
+        volume = c.MassProperties.Volume * 1000
+        c.Unfold()
+        flat = (c.FlatPattern.Length * 10, c.FlatPattern.Width * 10)
+        c.FlatPattern.ExitEdit()
+    finally:
+        doc.Close(True)
+    for label, actual, expected in (
+        ("volume", volume, 17342.5), ("flat length", flat[0], 100.0), ("flat width", flat[1], 86.5)
+    ):
+        error = abs(actual - expected) / expected
+        assert error <= TOLERANCE, f"{label} {actual:.2f}, expected {expected}"
+    return f"volume {volume:.1f} mm3, flat pattern {flat[0]:.1f} x {flat[1]:.1f} mm"
+
+
 def volume_case(build):
     def case(inv):
         inv.create_part(name="smoke_volume")
@@ -98,6 +147,9 @@ def pinned_document_case(inv):
 CASES = [
     ("cylinder_d50x10", volume_case(build_cylinder)),
     ("coupling_flange", volume_case(build_flange)),
+    ("fillet_block", volume_case(build_filleted_block)),
+    ("tapped_hole_m10", volume_case(build_tapped_plate)),
+    ("sheet_metal_flange", sheet_metal_case),
     ("pinned_document", pinned_document_case),
 ]
 
