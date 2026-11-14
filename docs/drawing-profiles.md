@@ -24,6 +24,8 @@ standard; no code change or server restart is needed.
 | `labels.section_line`, `labels.detail_fence` | letter at the section line ends and at the detail circle |
 | `hole_note_quantity` | prefix of hole notes on patterned holes; `<Quantity/>` is the hole count |
 | `centerline_overshoot_mm` | how far `add_centerlines` runs each cylinder axis past the outline |
+| `title_block_aliases` | names people use for a field the title block calls otherwise, e.g. `"APPROVED BY": "CHECKED BY"` in the Arjuna block |
+| `title_block_defaults` | values filled into empty fields when the first view is placed, e.g. `"DOCUMENT TYPE": "ENGINEERING DRAWING"` |
 
 Label texts use Inventor's tokens: `<DrawingViewName/>`, `<DrawingViewScale/>`,
 `<DrawingViewSheetName/>`, `<DrawingViewSheetIndex/>`, `<DrawingViewSheetZone/>`
@@ -34,7 +36,21 @@ profile leaves that part out.
 The profile changes styles inside the new drawing only; the template and the style
 library are not touched.
 
-The Arjuna dimension style (`references/templates/Arjuna Fix.styxml`: one decimal,
-comma, no trailing zeros, Tahoma 3.5 mm) has no import call in the Inventor API. The
-profile reproduces its number format; for the exact style, import the `.styxml` once
-into the migrated template through the Style and Standard Editor and save the template.
+## Preparing the Arjuna templates
+
+1. `python -X utf8 -u tools/prepare_arjuna_templates.py` copies every template from
+   `references/templates/` to `references/templates/2027/`, saves it once in this
+   Inventor, adds a DOCUMENT TYPE prompt under its label, and sets the name fields to
+   2 mm so "Rachmadi Norcahyo" fits the APPROVED BY box. Rerunning it keeps existing
+   copies (and their imported styles); `--force` starts over from the originals.
+2. The Arjuna styles (`Arjuna Fix.styxml`: dimension style "Arjuna", one decimal,
+   comma, no trailing zeros, Tahoma 3.5 mm text, ISO leader; `Mini Center Mark` and
+   `Super Mini Center Mark`) have no import call in the Inventor API. Open the copy,
+   Manage → Styles Editor → Import each `.styxml`, Save and Close. Then make "Arjuna"
+   the default dimension style in Object Defaults and save the template (done for
+   `Template Landscape Arjuna FIX A3.idw` on 2026-11-14; the other four still need it).
+3. Close the template in Inventor before making drawings: `Documents.Add` refuses a
+   template that is open.
+
+Until a template has the styles, the profile's number format settings still give the
+Arjuna look for dimensions.

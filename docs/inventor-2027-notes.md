@@ -186,7 +186,27 @@ The translators report `Activated = False` until used; call `Activate()` first.
   with its view; a retrieved dimension's `Intent.Geometry` is `None`, so the view
   cannot be read back from the dimension itself.
 - `.styxml` style exports have no import call in the API (no `Import` on the styles
-  managers); import them through the Style and Standard Editor.
+  managers); import them through the Style and Standard Editor. The editor's library
+  is read-only here, so imports land in the document's local styles.
+- `Documents.Add` fails with `E_INVALIDARG` when the template file is open in Inventor.
+- `TextBox.FormattedText` takes the decimal mark the document uses
+  (`FontSize='0,2'` here); the other mark is refused with `E_INVALIDARG`.
+- Tolerances: `GeneralDimension.Tolerance.SetToSymmetric / SetToDeviation /
+  SetToLimits / SetToFits(type, hole, shaft)`, values in cm. `SetToShowFits` raises
+  `E_NOTIMPL`. Fit type 31242 (`kLimitsFitsLinearTolerance`) prints "Ø30 H7"; 31243
+  adds the size limits "(30,021/30,000)".
+- Feature control frames: `FeatureControlFrames.CreateFeatureControlFrameRows()`,
+  `rows.Add(characteristic, tolerance, lower, datum1, datum2, datum3)`, then
+  `FeatureControlFrames.Add(leaderPoints, rows)`. The tolerance string is printed as
+  is: "n0,2" shows "n0,2", so put the Ø character itself in it.
+- There is no datum identifier collection in the drawing API. A sketched symbol (box
+  plus a `<Prompt>` letter) placed with `SketchedSymbols.AddWithLeader` and
+  `Leader.ArrowheadType = 71955` (`kDatum60FilledArrowheadType`) does the job.
+  `PromptStrings` must be a typed string array
+  (`VARIANT(VT_ARRAY | VT_BSTR, [...])`); a tuple gives `E_INVALIDARG`.
+- `SurfaceTextureSymbols.Add(leaderPoints, type, forceTail, majority, allAround, maxRoughness)`.
+- `Sheet.CreateGeometryIntent(curve)` without a point attaches a leader to the curve's
+  start; pass a sheet `Point2d` on the curve as the second argument to land elsewhere.
 - Automated centerlines include the bolt circle of a circular pattern. A circular
   `Centerline` has `Geometry.Center` / `Radius` in sheet cm, and
   `GeneralDimensions.AddDiameter(textPos, sheet.CreateGeometryIntent(centerline))`
