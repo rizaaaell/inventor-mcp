@@ -33,34 +33,43 @@ for doc in list(srv.inv.app.Documents):
         doc.Close(True)  # a previous run's drawing would block the save below
 print(srv.create_drawing())
 front = view_name(out := srv.add_base_view(MODEL, 115, 150)); print(out)
-top = view_name(out := srv.add_projected_view(front, 115, 250)); print(out)
+top = view_name(out := srv.add_projected_view(front, 115, 255)); print(out)
 section = view_name(out := srv.add_section_view(front, 0, -70, 0, 70, 255, 150, "A")); print(out)
 print(srv.add_base_view(MODEL, 350, 220, 0.5, "iso_top_right"))
 for v in (front, top, section):
     print(srv.add_centerlines(v))
-for v in (front, top):
-    print(srv.retrieve_dimensions(v))
+# Lengths come from the model in the top view; its diameters are drawn in the section
+# instead, and only the chamfer on the right-hand stack is kept.
+print(srv.retrieve_dimensions(top))
+top_right = srv.inv._view_rect(srv.inv._view(top))[2]
+drop = [d["index"] for d in json.loads(srv.list_dimensions()) if d["view"] == top
+        and (d["text"].startswith("n") or (d["text"] == "1" and d["text_mm"][0] < top_right))]
+print(srv.delete_dimension(",".join(map(str, drop))))
 
-# The hole note replaces the retrieved Ø11, and the chamfer is already shown in the top view.
-duplicates = [d["index"] for d in json.loads(srv.list_dimensions())
-              if d["view"] == front and d["text"] in ("n11", "1")]
-print(srv.delete_dimension(",".join(map(str, duplicates))))
-print(srv.add_hole_note(front, 0, 50.5, -62, 68))
+# Section A-A (hub left, x -25..5; disk right, x 5..25; bore ±15, hub ±30, disk ±60):
+# diameters of the turned part as Ø-prefixed linear dimensions, stacked outside on the left.
+print(srv.add_dimension(section, "vertical", -15, 15, -15, -15, text_x=-37, text_y=0, prefix="Ø"))
+print(srv.add_dimension(section, "vertical", -15, 30, -15, -30, text_x=-47, text_y=0, prefix="Ø"))
+print(srv.add_dimension(section, "vertical", 15, 60, 15, -60, text_x=-57, text_y=0, prefix="Ø"))
+
+# Front view: only what the circular view shows best, the bolt circle and the holes.
+print(srv.add_hole_note(front, 0, 50.5, -55, 72))
 print(srv.add_dimension(front, "pcd", 0, -45, text_x=-58, text_y=-72))
 
 # Tolerances and GD&T. These are proposals for a shaft coupling flange, not values
 # from a released design: bore H7 on the shaft, mating face A, bore axis B; face A flat
 # and square to the bore, bolt holes located from A and B.
-bore = next(d["index"] for d in json.loads(srv.list_dimensions()) if d["view"] == front and d["text"] == "n30")
+bore = next(d["index"] for d in json.loads(srv.list_dimensions())
+            if d["view"] == section and d["text"].startswith("Ø30"))
 print(srv.set_tolerance(bore, "fit", fit="H7"))
-print(srv.move_dimension(bore, 62, -75))
+print(srv.add_gdt(front, 0, 0, -52, 63, "position", 0.2, "A,B", diameter_zone=True, leader=False))
 print(srv.add_datum(section, 25, 40, "A", 42, 62))
-print(srv.add_datum(section, -12, -15, "B", -50, -8))  # leader enters through the open bore
+# On the extension line of Ø30 H7 the triangle makes the bore axis the datum.
+print(srv.add_datum(section, -31, -15, "B", -31, -23, attach=False))
+print(srv.add_surface_finish(section, -29, 15, -29, 24, "Ra 1,6", attach=False))
 print(srv.add_gdt(section, 25, -40, 45, -72, "flatness", 0.03))
 print(srv.add_gdt(section, 25, -48, 45, -84, "perpendicularity", 0.05, "B"))
-print(srv.add_gdt(front, 0, 50.5, -78, 58, "position", 0.2, "A,B", diameter_zone=True))
 print(srv.add_surface_finish(section, 25, -10, 50, -20, "Ra 3,2"))
-print(srv.add_surface_finish(section, -12, 15, -50, 12, "Ra 1,6"))
 
 print(srv.set_title_block(json.dumps({
     "TITLE": "Flens Kopling",

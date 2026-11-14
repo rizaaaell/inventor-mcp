@@ -72,6 +72,56 @@ def shrink_long_fields(doc, size_cm: float = 0.2) -> str:
     return f"font {size_cm:g} cm on {', '.join(changed)}" if changed else "field fonts already small"
 
 
+def _find(collection, name):
+    for i in range(1, collection.Count + 1):
+        if collection.Item(i).Name == name:
+            return collection.Item(i)
+    return None
+
+
+def _copy(collection, source_name: str, new_name: str):
+    existing = _find(collection, new_name)
+    if existing is not None:
+        return existing
+    return _find(collection, source_name).Copy(new_name)
+
+
+def arjuna_standard(doc) -> str:
+    """Give the imported Arjuna styles names the style library does not have.
+
+    New drawings replace any style whose name the library also has (Object Defaults
+    (ISO), General (ISO), Note Text (ISO)) with the library's version, so the imported
+    leader and text settings and the Arjuna defaults would be lost. Copies under new
+    names survive, and "Arjuna Standard" ties them together.
+    """
+    sm = doc.StylesManager
+    arjuna = _find(sm.DimensionStyles, "Arjuna")
+    if arjuna is None:
+        return "no Arjuna dimension style imported yet, standard left as is"
+    text = _copy(sm.TextStyles, "Note Text (ISO)", "Arjuna Note Text")
+    leader = _copy(sm.LeaderStyles, "General (ISO)", "Arjuna Leader")
+    try:
+        leader.TextStyle = text
+    except Exception:
+        pass
+    arjuna.TextStyle = text
+    base = sm.ActiveStandardStyle
+    defaults = _copy(sm.ObjectDefaultsStyles, base.ActiveObjectDefaults.Name, "Arjuna Object Defaults")
+    for attr in ("LinearDimensionStyle", "DiameterDimensionStyle", "RadialDimensionStyle",
+                 "AngularDimensionStyle", "BaselineDimensionStyle", "OrdinateDimensionStyle",
+                 "OrdinateSetDimensionStyle", "LeaderTextStyle", "HoleNoteStyle", "ThreadNoteStyle",
+                 "ChamferNoteStyle", "HoleTagStyle", "BendNoteStyle", "PunchNoteStyle"):
+        setattr(defaults, attr, arjuna)
+    defaults.SketchedSymbolLeaderStyle = leader
+    defaults.SketchedSymbolTextStyle = text
+    defaults.GeneralNoteStyle = text
+    standard = _copy(sm.StandardStyles, base.Name, "Arjuna Standard")
+    standard.ActiveObjectDefaults = defaults
+    standard.FirstAngleProjection = False
+    sm.ActiveStandardStyle = standard
+    return "Arjuna Standard active (Arjuna dimensions, Arjuna Leader, Arjuna Note Text)"
+
+
 def main():
     inv = InventorConnection()
     print(inv.connect())
@@ -92,6 +142,7 @@ def main():
             doc = app.Documents.Open(str(dst), False)
             note = ("migrated, " if fresh else "kept, ") + add_document_type_field(doc)
             note += ", " + shrink_long_fields(doc)
+            note += ", " + arjuna_standard(doc)
             doc.Save()
             print(f"OK   {src.name}: {note}")
         except Exception as exc:
