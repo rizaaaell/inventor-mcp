@@ -635,6 +635,14 @@ def drawing():
         return f"{out}; {moved}"
     check("set_tolerance + move_dimension", tolerance_and_move)
 
+    def angle():
+        out = srv.add_dimension(state["front"], "angle", 35, 0, 0, 35, text_x=45, text_y=45,
+                                vertex_x=10, vertex_y=0)
+        assert out.split()[2] == "90°", out
+        index = len(json.loads(srv.list_dimensions()))
+        return f"{out}; {srv.set_tolerance(index, 'basic')}"
+    check("add_dimension angle + basic", angle)
+
     def fit():
         listed = json.loads(srv.list_dimensions())
         target = next(d for d in listed if d["view"] == state["front"] and d["text"].startswith("n20"))

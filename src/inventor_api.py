@@ -1904,10 +1904,13 @@ class InventorConnection:
 
     def add_dimension(self, view: str, kind: str, x1: float, y1: float,
                       x2: float | None = None, y2: float | None = None,
-                      text_x: float = 0, text_y: float = 0, prefix: str = "") -> str:
-        """kind: diameter / radius (curve nearest x1,y1) or horizontal / vertical / aligned
-        (between the curves nearest x1,y1 and x2,y2). All points in model mm from the view center.
-        prefix goes before the value, e.g. "Ø" for a diameter dimensioned in a side view."""
+                      text_x: float = 0, text_y: float = 0, prefix: str = "",
+                      vertex_x: float = 0, vertex_y: float = 0) -> str:
+        """kind: diameter / radius (curve nearest x1,y1); horizontal / vertical / aligned
+        (between the curves nearest x1,y1 and x2,y2); angle (between the centers of the
+        circles nearest x1,y1 and x2,y2, seen from the center of the circle nearest
+        vertex_x,vertex_y, e.g. two bolt holes around the bore). All points in model mm from
+        the view center. prefix goes before the value, e.g. "Ø" for a diameter in a side view."""
         sheet = self.active_drawing().ActiveSheet
         v = self._view(view)
         dims = sheet.DrawingDimensions.GeneralDimensions
@@ -1920,6 +1923,17 @@ class InventorConnection:
         elif kind == "pcd":
             centerline, miss = self._nearest_circle_centerline(sheet, v, x1, y1)
             dim = dims.AddDiameter(text, sheet.CreateGeometryIntent(centerline))
+        elif kind == "angle":
+            if x2 is None or y2 is None:
+                raise ValueError("An angle dimension needs x2 and y2")
+            c1, m1 = self._nearest_curve(v, x1, y1, circular=True)
+            c2, m2 = self._nearest_curve(v, x2, y2, circular=True)
+            cv, mv = self._nearest_curve(v, vertex_x, vertex_y, circular=True)
+            miss = max(m1, m2, mv)
+            center = 57860  # kCenterPointIntent; the vertex is the middle intent
+            dim = dims.AddAngular(text, sheet.CreateGeometryIntent(c1, center),
+                                  sheet.CreateGeometryIntent(cv, center),
+                                  sheet.CreateGeometryIntent(c2, center))
         elif kind in ("horizontal", "vertical", "aligned"):
             if x2 is None or y2 is None:
                 raise ValueError(f"A {kind} dimension needs x2 and y2")
@@ -1929,12 +1943,12 @@ class InventorConnection:
             dim_type = {"aligned": 60161, "horizontal": 60162, "vertical": 60163}[kind]
             dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1), sheet.CreateGeometryIntent(c2), dim_type)
         else:
-            raise ValueError("kind must be diameter, radius, pcd, horizontal, vertical or aligned")
+            raise ValueError("kind must be diameter, radius, pcd, angle, horizontal, vertical or aligned")
         if prefix:
             dim.Text.FormattedText = prefix + dim.Text.FormattedText
         self._tag_view(dim, v.Name)
         clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"dimension {dim.Text.Text}" in c]
-        picked = "curves" if kind in ("horizontal", "vertical", "aligned") else "curve"
+        picked = "curves" if kind in ("horizontal", "vertical", "aligned", "angle") else "curve"
         return (f"{kind.capitalize()} dimension {dim.Text.Text} in {v.Name} "
                 f"(picked {picked} within {miss:.1f} mm); text overlaps: {clashes or 'none'}")
 

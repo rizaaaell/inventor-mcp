@@ -696,21 +696,25 @@ def add_centerlines(view: str) -> str:
 @mcp.tool()
 def add_dimension(view: str, kind: str, x1: float, y1: float,
                   x2: float | None = None, y2: float | None = None,
-                  text_x: float = 0, text_y: float = 0, prefix: str = "") -> str:
+                  text_x: float = 0, text_y: float = 0, prefix: str = "",
+                  vertex_x: float = 0, vertex_y: float = 0) -> str:
     """Add one dimension to a view. Points are model mm from the view center; each picks
     the nearest visible curve.
 
     Args:
         view: view name.
         kind: diameter or radius (curve nearest x1, y1); pcd (circular centerline such as
-              a bolt circle nearest x1, y1, after add_centerlines); or horizontal, vertical,
-              aligned (distance between the curves nearest x1, y1 and x2, y2).
+              a bolt circle nearest x1, y1, after add_centerlines); horizontal, vertical,
+              aligned (distance between the curves nearest x1, y1 and x2, y2); or angle
+              (between the centers of the circles nearest x1, y1 and x2, y2, around the
+              center of the circle nearest vertex_x, vertex_y; e.g. bolt hole spacing).
         x1, y1, x2, y2: points on or near the curves to dimension.
         text_x, text_y: where the dimension text goes, same frame. Keep it outside the part.
         prefix: text before the value, "Ø" for a diameter dimensioned in a side or section
                 view (the usual place for diameters of turned parts).
+        vertex_x, vertex_y: for kind "angle", a point on the circle at the vertex (e.g. the bore).
     """
-    return inv.add_dimension(view, kind, x1, y1, x2, y2, text_x, text_y, prefix)
+    return inv.add_dimension(view, kind, x1, y1, x2, y2, text_x, text_y, prefix, vertex_x, vertex_y)
 
 
 @mcp.tool()

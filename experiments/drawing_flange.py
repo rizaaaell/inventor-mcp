@@ -33,7 +33,8 @@ for doc in list(srv.inv.app.Documents):
         doc.Close(True)  # a previous run's drawing would block the save below
 print(srv.create_drawing())
 front = view_name(out := srv.add_base_view(MODEL, 115, 150)); print(out)
-top = view_name(out := srv.add_projected_view(front, 115, 255)); print(out)
+# Hidden lines in the top view show the bolt holes and the bore through the part.
+top = view_name(out := srv.add_projected_view(front, 115, 255, style="hidden")); print(out)
 section = view_name(out := srv.add_section_view(front, 0, -70, 0, 70, 255, 150, "A")); print(out)
 print(srv.add_base_view(MODEL, 350, 220, 0.5, "iso_top_right"))
 for v in (front, top, section):
@@ -55,6 +56,8 @@ print(srv.add_dimension(section, "vertical", 15, 60, 15, -60, text_x=-57, text_y
 # Front view: only what the circular view shows best, the bolt circle and the holes.
 print(srv.add_hole_note(front, 0, 50.5, -55, 72))
 print(srv.add_dimension(front, "pcd", 0, -45, text_x=-58, text_y=-72))
+# Hole spacing from the bore center, outside the flange rim.
+print(srv.add_dimension(front, "angle", 45, 0, 0, 45, text_x=50, text_y=50, vertex_x=15, vertex_y=0))
 
 # Tolerances and GD&T. These are proposals for a shaft coupling flange, not values
 # from a released design: bore H7 on the shaft, mating face A, bore axis B; face A flat
@@ -62,6 +65,10 @@ print(srv.add_dimension(front, "pcd", 0, -45, text_x=-58, text_y=-72))
 bore = next(d["index"] for d in json.loads(srv.list_dimensions())
             if d["view"] == section and d["text"].startswith("Ø30"))
 print(srv.set_tolerance(bore, "fit", fit="H7"))
+# The position tolerance locates the holes from basic (exact, boxed) PCD and spacing.
+for d in json.loads(srv.list_dimensions()):
+    if d["view"] == front and (d["text"] == "n90" or d["text"].endswith("°")):
+        print(srv.set_tolerance(d["index"], "basic"))
 print(srv.add_gdt(front, 0, 0, -52, 63, "position", 0.2, "A,B", diameter_zone=True, leader=False))
 print(srv.add_datum(section, 25, 40, "A", 42, 62))
 # On the extension line of Ø30 H7 the triangle makes the bore axis the datum.
