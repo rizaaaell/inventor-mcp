@@ -23,5 +23,11 @@
   "title_block_defaults": {
     "DOCUMENT TYPE": "ENGINEERING DRAWING",
     "APPROVED BY": "Rachmadi Norcahyo"
+  },
+  "general_tolerances": {
+    ".X": "0,2",
+    ".XX": "0,1",
+    ".XXX": "0,05",
+    "ANGULAR": "1°"
   }
 }

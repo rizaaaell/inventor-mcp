@@ -696,7 +696,7 @@ def add_centerlines(view: str) -> str:
 @mcp.tool()
 def add_dimension(view: str, kind: str, x1: float, y1: float,
                   x2: float | None = None, y2: float | None = None,
-                  text_x: float = 0, text_y: float = 0) -> str:
+                  text_x: float = 0, text_y: float = 0, prefix: str = "") -> str:
     """Add one dimension to a view. Points are model mm from the view center; each picks
     the nearest visible curve.
 
@@ -706,9 +706,11 @@ def add_dimension(view: str, kind: str, x1: float, y1: float,
               a bolt circle nearest x1, y1, after add_centerlines); or horizontal, vertical,
               aligned (distance between the curves nearest x1, y1 and x2, y2).
         x1, y1, x2, y2: points on or near the curves to dimension.
-        text_x, text_y: where the dimension text goes, same frame.
+        text_x, text_y: where the dimension text goes, same frame. Keep it outside the part.
+        prefix: text before the value, "Ø" for a diameter dimensioned in a side or section
+                view (the usual place for diameters of turned parts).
     """
-    return inv.add_dimension(view, kind, x1, y1, x2, y2, text_x, text_y)
+    return inv.add_dimension(view, kind, x1, y1, x2, y2, text_x, text_y, prefix)
 
 
 @mcp.tool()
@@ -759,7 +761,7 @@ def set_tolerance(index: int, kind: str, upper: float = 0, lower: float = 0, fit
 @mcp.tool()
 def add_gdt(view: str, x: float, y: float, text_x: float, text_y: float,
             characteristic: str, tolerance: float, datums: str = "",
-            diameter_zone: bool = False) -> str:
+            diameter_zone: bool = False, attach: bool = True, leader: bool = True) -> str:
     """Feature control frame, with a leader to the curve nearest (x, y).
 
     Args:
@@ -772,27 +774,35 @@ def add_gdt(view: str, x: float, y: float, text_x: float, text_y: float,
         tolerance: tolerance value in mm, e.g. 0.05.
         datums: datum letters in order of precedence, e.g. "A,B".
         diameter_zone: True puts Ø before the value (cylindrical zone, e.g. for position).
+        attach: False ends the leader exactly at (x, y), e.g. on an extension line.
+        leader: False places the bare frame at (text_x, text_y), e.g. right under a hole note.
     """
-    return inv.add_gdt(view, x, y, text_x, text_y, characteristic, tolerance, datums, diameter_zone)
+    return inv.add_gdt(view, x, y, text_x, text_y, characteristic, tolerance, datums,
+                       diameter_zone, attach, leader)
 
 
 @mcp.tool()
-def add_datum(view: str, x: float, y: float, label: str, text_x: float, text_y: float) -> str:
+def add_datum(view: str, x: float, y: float, label: str, text_x: float, text_y: float,
+              attach: bool = True) -> str:
     """Datum feature symbol: the letter in a box at (text_x, text_y), with a filled triangle
-    on the curve nearest (x, y). Points are model mm from the view center."""
-    return inv.add_datum(view, x, y, label, text_x, text_y)
+    on the curve nearest (x, y). attach False puts the triangle exactly at (x, y), e.g. on
+    the extension line of a diameter dimension to make the axis the datum.
+    Points are model mm from the view center."""
+    return inv.add_datum(view, x, y, label, text_x, text_y, attach)
 
 
 @mcp.tool()
 def add_surface_finish(view: str, x: float, y: float, text_x: float, text_y: float,
-                       roughness: str = "Ra 3,2", removal: str = "required") -> str:
+                       roughness: str = "Ra 3,2", removal: str = "required",
+                       attach: bool = True) -> str:
     """Surface texture symbol with a leader to the curve nearest (x, y).
 
     Args:
         roughness: e.g. "Ra 3,2" or "Ra 1,6".
         removal: required (machined surface), prohibited, or any.
+        attach: False ends the leader exactly at (x, y), e.g. on an extension line.
     """
-    return inv.add_surface_finish(view, x, y, text_x, text_y, roughness, removal)
+    return inv.add_surface_finish(view, x, y, text_x, text_y, roughness, removal, attach)
 
 
 @mcp.tool()

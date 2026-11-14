@@ -1407,6 +1407,35 @@ class InventorConnection:
         for key, view_type in self._ANNOTATION_TYPES.items():
             if key in labels:
                 std.SetViewAnnotationDefaults(view_type, labels[key])
+        if profile.get("general_tolerances"):
+            self._write_general_tolerances(doc, profile["general_tolerances"])
+
+    def _write_general_tolerances(self, doc, values: dict) -> None:
+        """Put the profile's general tolerances after each "=±" of the title block's
+        "TOLERANCES OTHERWISE NOTED" text, e.g. {".X": "0,2", "ANGULAR": "1°"}."""
+        tb = doc.ActiveSheet.TitleBlock
+        if tb is None:
+            return
+        definition = tb.Definition
+        boxes = definition.Sketch.TextBoxes
+        target = next((boxes.Item(i) for i in range(1, boxes.Count + 1)
+                       if boxes.Item(i).Text.upper().startswith("TOLERANCES")), None)
+        if target is None:
+            return
+        text = target.FormattedText
+        for key, value in values.items():
+            # "=±" up to the end of that line's run; longer keys first keeps ".X" off ".XX".
+            text = re.sub(rf"((?<![.\w]){re.escape(key)}\s*=±)[^<]*", lambda m: f"{m.group(1)} {value}", text)
+        if text == target.FormattedText:
+            return
+        sketch = definition.Edit()
+        try:
+            boxes = sketch.TextBoxes
+            box = next(boxes.Item(i) for i in range(1, boxes.Count + 1)
+                       if boxes.Item(i).Text.upper().startswith("TOLERANCES"))
+            box.FormattedText = text
+        finally:
+            definition.ExitEdit(True)
 
     def create_drawing(self, profile: str = "default", template: str = "", sheet_size: str = "") -> str:
         """New drawing set up by a profile from drawing_profiles/; template and sheet_size override it."""
@@ -1608,6 +1637,15 @@ class InventorConnection:
         label above a detail circle, so those are boxes sized from the ISO text height.
         """
         boxes = []
+        try:
+            std = sheet.Parent.StylesManager.ActiveStandardStyle
+            section_mark = std.GetViewAnnotationDefaults(10503)
+            detail_mark = std.GetViewAnnotationDefaults(10502)
+        except Exception:
+            section_mark = detail_mark = "<DrawingViewName/> / <DrawingViewSheetZone/>"
+        # Sheet tokens print as "A / .A6"; without them the mark is the letter alone.
+        mark_width = 40 if "Sheet" in section_mark else 15
+        fence_half = 20 if "Sheet" in detail_mark else 6
         views = sheet.DrawingViews
         for i in range(1, views.Count + 1):
             v = views.Item(i)
@@ -1623,13 +1661,13 @@ class InventorConnection:
                     for end in (lines.Item(j).StartSketchPoint, lines.Item(j).EndSketchPoint):
                         p = sk.SketchToSheetSpace(end.Geometry)
                         x, y = p.X * 10, p.Y * 10
-                        boxes.append((f"section line label {v.Name}", (x - 5, y - 10, x + 40, y + 10)))
+                        boxes.append((f"section line label {v.Name}", (x - 5, y - 10, x + mark_width, y + 10)))
             except Exception:
                 pass
             try:
                 c, r = v.FenceCenter, v.FenceRadius  # only circular detail views
                 x, y, r = c.X * 10, c.Y * 10, r * 10
-                boxes.append((f"detail fence label {v.Name}", (x - r - 10, y + r, x + r + 10, y + r + 12)))
+                boxes.append((f"detail fence label {v.Name}", (x - fence_half, y + r, x + fence_half, y + r + 9)))
             except Exception:
                 pass
         for label, collection in (("feature control frame", sheet.FeatureControlFrames),
@@ -1866,9 +1904,10 @@ class InventorConnection:
 
     def add_dimension(self, view: str, kind: str, x1: float, y1: float,
                       x2: float | None = None, y2: float | None = None,
-                      text_x: float = 0, text_y: float = 0) -> str:
+                      text_x: float = 0, text_y: float = 0, prefix: str = "") -> str:
         """kind: diameter / radius (curve nearest x1,y1) or horizontal / vertical / aligned
-        (between the curves nearest x1,y1 and x2,y2). All points in model mm from the view center."""
+        (between the curves nearest x1,y1 and x2,y2). All points in model mm from the view center.
+        prefix goes before the value, e.g. "Ø" for a diameter dimensioned in a side view."""
         sheet = self.active_drawing().ActiveSheet
         v = self._view(view)
         dims = sheet.DrawingDimensions.GeneralDimensions
@@ -1891,6 +1930,8 @@ class InventorConnection:
             dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1), sheet.CreateGeometryIntent(c2), dim_type)
         else:
             raise ValueError("kind must be diameter, radius, pcd, horizontal, vertical or aligned")
+        if prefix:
+            dim.Text.FormattedText = prefix + dim.Text.FormattedText
         self._tag_view(dim, v.Name)
         clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"dimension {dim.Text.Text}" in c]
         picked = "curves" if kind in ("horizontal", "vertical", "aligned") else "curve"
@@ -2047,27 +2088,43 @@ class InventorConnection:
         "total_runout": 4096, "cylindricity": 8192,
     }
 
-    def _leader_points(self, view, x: float, y: float, text_x: float, text_y: float):
-        """Leader from the text position to the curve nearest (x, y), attached at the point
-        of the curve closest to (x, y); without that point it lands on the curve's start."""
-        curve, miss, foot = self._closest_on_curve(view, x, y)
+    def _leader_points(self, view, x: float, y: float, text_x: float, text_y: float,
+                       attach: bool = True, leader: bool = True):
+        """Leader from the text position to (x, y).
+
+        attach: end on the curve nearest (x, y), at its closest point (without that point
+        Inventor puts the end on the curve's start). False ends exactly at (x, y), e.g. on
+        an extension line, which is not a view curve. leader False: text position only.
+        Returns (points, distance to the curve in mm or None).
+        """
         points = self.app.TransientObjects.CreateObjectCollection()
         points.Add(self._view_point(view, text_x, text_y))
+        if not leader:
+            return points, None
+        if not attach:
+            points.Add(self._view_point(view, x, y))
+            return points, None
+        curve, miss, foot = self._closest_on_curve(view, x, y)
         points.Add(self.active_drawing().ActiveSheet.CreateGeometryIntent(curve, foot))
         return points, miss
 
+    @staticmethod
+    def _where(miss) -> str:
+        return "at a free point" if miss is None else f"on a curve within {miss:.1f} mm"
+
     def add_gdt(self, view: str, x: float, y: float, text_x: float, text_y: float,
                 characteristic: str, tolerance: float, datums: str = "",
-                diameter_zone: bool = False) -> str:
+                diameter_zone: bool = False, attach: bool = True, leader: bool = True) -> str:
         """Feature control frame with a leader to the curve nearest (x, y).
-        datums: comma-separated datum letters in order of precedence, e.g. "A,B"."""
+        datums: comma-separated datum letters in order of precedence, e.g. "A,B".
+        leader False places the bare frame at (text_x, text_y), e.g. under a hole note."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
         code = self._GDT.get(characteristic.lower())
         if code is None:
             raise ValueError(f"Unknown characteristic {characteristic}. Use {', '.join(self._GDT)}.")
-        points, miss = self._leader_points(v, x, y, text_x, text_y)
+        points, miss = self._leader_points(v, x, y, text_x, text_y, attach, leader)
         marker = "," if self._profile_of(doc).get("decimal_marker", "comma") == "comma" else "."
         value = f"{tolerance:g}".replace(".", marker)
         letters = [d.strip() for d in datums.split(",") if d.strip()][:3]
@@ -2076,7 +2133,8 @@ class InventorConnection:
         rows.Add(code, ("Ø" if diameter_zone else "") + value, "", *letters)
         sheet.FeatureControlFrames.Add(points, rows)
         frame = " | ".join([characteristic, ("Ø" if diameter_zone else "") + value] + [d for d in letters if d])
-        return f"Feature control frame [{frame}] in {v.Name} (leader on a curve within {miss:.1f} mm)"
+        where = "no leader" if not leader else f"leader {self._where(miss)}"
+        return f"Feature control frame [{frame}] in {v.Name} ({where})"
 
     _DATUM_SYMBOL = "Datum identifier (MCP)"
 
@@ -2102,30 +2160,33 @@ class InventorConnection:
         return definition
 
     def add_datum(self, view: str, x: float, y: float, label: str,
-                  text_x: float, text_y: float) -> str:
+                  text_x: float, text_y: float, attach: bool = True) -> str:
         """Datum identifier: letter in a box at (text_x, text_y), filled triangle on the
-        curve nearest (x, y). Points are model mm from the view center."""
+        curve nearest (x, y), or exactly at (x, y) with attach False (e.g. on the extension
+        line of a diameter, which makes the axis the datum). Model mm from the view center."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
-        points, miss = self._leader_points(v, x, y, text_x, text_y)
+        points, miss = self._leader_points(v, x, y, text_x, text_y, attach)
         prompts = win32com.client.VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_BSTR, [label])
         symbol = sheet.SketchedSymbols.AddWithLeader(self._datum_definition(doc), points, 0.0, 1.0, prompts)
         symbol.Leader.ArrowheadType = 71955  # kDatum60FilledArrowheadType
-        return f"Datum {label} in {v.Name} (triangle on a curve within {miss:.1f} mm)"
+        return f"Datum {label} in {v.Name} (triangle {self._where(miss)})"
 
     def add_surface_finish(self, view: str, x: float, y: float, text_x: float, text_y: float,
-                           roughness: str = "Ra 3,2", removal: str = "required") -> str:
-        """Surface texture symbol with a leader to the curve nearest (x, y).
-        removal: required (machined), prohibited, or any."""
+                           roughness: str = "Ra 3,2", removal: str = "required",
+                           attach: bool = True) -> str:
+        """Surface texture symbol with a leader to the curve nearest (x, y), or exactly to
+        (x, y) with attach False (e.g. an extension line). removal: required (machined),
+        prohibited, or any."""
         sheet = self.active_drawing().ActiveSheet
         v = self._view(view)
         kind = {"any": 76801, "required": 76802, "prohibited": 76803}.get(removal.lower())
         if kind is None:
             raise ValueError("removal must be required, prohibited or any")
-        points, miss = self._leader_points(v, x, y, text_x, text_y)
+        points, miss = self._leader_points(v, x, y, text_x, text_y, attach)
         sheet.SurfaceTextureSymbols.Add(points, kind, False, False, False, roughness)
-        return f"Surface finish {roughness} ({removal} removal) in {v.Name} (leader on a curve within {miss:.1f} mm)"
+        return f"Surface finish {roughness} ({removal} removal) in {v.Name} (leader {self._where(miss)})"
 
     def _title_block_fields(self, sheet) -> dict:
         """{FIELD: (text box, source)} for the fillable fields of the sheet's title block.
@@ -2236,7 +2297,10 @@ class InventorConnection:
         if sheet.TitleBlock is not None:
             tb = self._rect(sheet.TitleBlock)
             problems += [f"{n} overlaps the title block" for n, r in rects.items() if self._overlap(r, tb)]
-        problems += [f"{a} overlaps {b}" for a, b in self._clashes(self._text_boxes(sheet))]
+        boxes = self._text_boxes(sheet)
+        problems += [f"{a} overlaps {b}" for a, b in self._clashes(boxes)]
+        problems += [f"{name} sticks out of the border" for name, r in boxes
+                     if r[0] < area[0] or r[1] < area[1] or r[2] > area[2] or r[3] > area[3]]
         return {
             "sheet_mm": [round(sheet.Width * 10, 1), round(sheet.Height * 10, 1)],
             "border_mm": [round(n, 1) for n in area],
@@ -2252,6 +2316,7 @@ class InventorConnection:
         path = os.path.abspath(path)
         sheet = doc.ActiveSheet
         doc.Activate()
+        doc.SelectSet.Clear()  # the last placed object stays highlighted in red otherwise
         view = self.app.ActiveView
         view.Fit()
         height = int(round(width * sheet.Height / sheet.Width))
