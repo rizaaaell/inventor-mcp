@@ -1,0 +1,18 @@
+{
+  "description": "Arjuna drawing settings until the team template arrives: Inventor's ISO template, third angle, mm, no sheet-zone references in view labels.",
+  "template": "builtin:Metric/ISO.idw",
+  "sheet_size": "A3",
+  "projection": "third",
+  "units": "mm",
+  "decimal_marker": "comma",
+  "dimension_precision": 2,
+  "trailing_zeros": false,
+  "labels": {
+    "section_view": "<DrawingViewName/>-<DrawingViewName/> ( <DrawingViewScale/> )",
+    "detail_view": "<DrawingViewName/> ( <DrawingViewScale/> )",
+    "auxiliary_view": "<DrawingViewName/> ( <DrawingViewScale/> )",
+    "section_line": "<DrawingViewName/>",
+    "detail_fence": "<DrawingViewName/>"
+  },
+  "hole_note_quantity": "<Quantity/>x "
+}

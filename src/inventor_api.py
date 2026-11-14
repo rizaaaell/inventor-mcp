@@ -1330,10 +1330,12 @@ class InventorConnection:
     # Sheet coordinates are mm from the sheet's bottom-left corner. Points inside a
     # view are mm in model units from the view center, x right and y up on the sheet.
 
-    # Inventor's own ISO template. Project templates from older releases make
-    # Documents.Add fail until they are opened and saved once in 2027.
-    DRAWING_TEMPLATE = (r"C:\Users\Public\Documents\Autodesk\Inventor {year}"
-                        r"\Templates\en-US\Metric\ISO.idw")
+    # Templates shipped with the installed Inventor, for "builtin:" in a profile.
+    BUILTIN_TEMPLATES = r"C:\Users\Public\Documents\Autodesk\Inventor {year}\Templates\en-US"
+    PROFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "drawing_profiles")
+    _VIEW_TYPES = {"section_view": 10503, "detail_view": 10502, "auxiliary_view": 10499}
+    _ANNOTATION_TYPES = {"section_line": 10503, "detail_fence": 10502}
     _SHEET_SIZES = {"A0": 9993, "A1": 9994, "A2": 9995, "A3": 9996, "A4": 9997}
     _VIEW_ORIENTATIONS = {
         "front": 10764, "top": 10754, "right": 10755, "back": 10756, "bottom": 10757,
@@ -1361,10 +1363,56 @@ class InventorConnection:
             raise RuntimeError(f"Active document is not a drawing (type={doc.DocumentType}).")
         return doc
 
-    def create_drawing(self, template: str = "iso", sheet_size: str = "A3") -> str:
-        if template.lower() == "iso":
+    def load_profile(self, name: str = "default") -> dict:
+        path = os.path.join(self.PROFILE_DIR, f"{name}.json")
+        if not os.path.exists(path):
+            available = sorted(f[:-5] for f in os.listdir(self.PROFILE_DIR) if f.endswith(".json"))
+            raise ValueError(f"No drawing profile {name!r}. Available: {available}")
+        with open(path, encoding="utf-8") as f:
+            profile = json.load(f)
+        profile["name"] = name
+        return profile
+
+    def _resolve_template(self, template: str) -> str:
+        if template.startswith("builtin:"):
             year = str(self.app.SoftwareVersion.DisplayVersion).split(".")[0]
-            template = self.DRAWING_TEMPLATE.format(year=year)
+            return os.path.join(self.BUILTIN_TEMPLATES.format(year=year),
+                                *template[len("builtin:"):].split("/"))
+        if not os.path.isabs(template):
+            return os.path.join(os.path.dirname(self.PROFILE_DIR), template)
+        return template
+
+    def _apply_profile(self, doc, profile: dict) -> None:
+        """Set projection, units, dimension format and label formats in this drawing."""
+        std = doc.StylesManager.ActiveStandardStyle
+        if "projection" in profile:
+            std.FirstAngleProjection = profile["projection"].lower() == "first"
+        if profile.get("units", "mm") == "mm":
+            std.LinearUnits = 11269  # kMillimeterLengthUnits
+        marker = {"period": 41473, "comma": 41474, "default": 41475}.get(profile.get("decimal_marker", ""))
+        if marker:
+            std.DecimalMarkerType = marker
+        defaults = std.ActiveObjectDefaults
+        for attr in ("LinearDimensionStyle", "DiameterDimensionStyle", "RadialDimensionStyle"):
+            style = getattr(defaults, attr)
+            if "dimension_precision" in profile:
+                style.LinearPrecision = 41729 + int(profile["dimension_precision"])  # kZeroDecimalPlace...
+            if "trailing_zeros" in profile:
+                style.TrailingZeroDisplay = bool(profile["trailing_zeros"])
+        labels = profile.get("labels", {})
+        for key, view_type in self._VIEW_TYPES.items():
+            if key in labels:
+                prefix, visible, _, constrain, below = std.GetViewLabelDefaults(view_type)
+                std.SetViewLabelDefaults(view_type, prefix, visible, labels[key], constrain, below)
+        for key, view_type in self._ANNOTATION_TYPES.items():
+            if key in labels:
+                std.SetViewAnnotationDefaults(view_type, labels[key])
+
+    def create_drawing(self, profile: str = "default", template: str = "", sheet_size: str = "") -> str:
+        """New drawing set up by a profile from drawing_profiles/; template and sheet_size override it."""
+        prof = self.load_profile(profile)
+        template = self._resolve_template(template or prof.get("template", "builtin:Metric/ISO.idw"))
+        sheet_size = sheet_size or prof.get("sheet_size", "")
         if not os.path.exists(template):
             raise RuntimeError(f"Drawing template not found: {template}")
         try:
@@ -1379,11 +1427,17 @@ class InventorConnection:
             if size is None:
                 raise ValueError(f"Unknown sheet size {sheet_size}. Use {', '.join(self._SHEET_SIZES)}.")
             sheet.Size = size
+        self._apply_profile(doc, prof)
+        self._profiles = getattr(self, "_profiles", {})
+        self._profiles[doc.InternalName] = prof
         self.pin_document(doc)
         std = doc.StylesManager.ActiveStandardStyle
         angle = "first" if std.FirstAngleProjection else "third"
-        return (f"Drawing created: {doc.DisplayName}, sheet {sheet.Width * 10:.0f}x"
+        return (f"Drawing created: {doc.DisplayName}, profile {profile}, sheet {sheet.Width * 10:.0f}x"
                 f"{sheet.Height * 10:.0f} mm, {std.Name}, {angle} angle projection")
+
+    def _profile_of(self, doc) -> dict:
+        return getattr(self, "_profiles", {}).get(doc.InternalName) or self.load_profile("default")
 
     @staticmethod
     def _rect(obj):
@@ -1562,6 +1616,13 @@ class InventorConnection:
                 boxes.append((f"dimension {d.Text.Text}", self._rect(d.Text)))
             except Exception:
                 pass
+        notes = sheet.DrawingNotes.HoleThreadNotes
+        for i in range(1, notes.Count + 1):
+            n = notes.Item(i)
+            try:
+                boxes.append((f"hole note {n.Text.Text}", self._rect(n.Text)))
+            except Exception:
+                pass
         return boxes
 
     def _text_boxes(self, sheet):
@@ -1683,6 +1744,9 @@ class InventorConnection:
             curve, miss = self._nearest_curve(v, x1, y1, circular=True)
             intent = sheet.CreateGeometryIntent(curve)
             dim = dims.AddDiameter(text, intent) if kind == "diameter" else dims.AddRadius(text, intent)
+        elif kind == "pcd":
+            centerline, miss = self._nearest_circle_centerline(sheet, v, x1, y1)
+            dim = dims.AddDiameter(text, sheet.CreateGeometryIntent(centerline))
         elif kind in ("horizontal", "vertical", "aligned"):
             if x2 is None or y2 is None:
                 raise ValueError(f"A {kind} dimension needs x2 and y2")
@@ -1692,11 +1756,84 @@ class InventorConnection:
             dim_type = {"aligned": 60161, "horizontal": 60162, "vertical": 60163}[kind]
             dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1), sheet.CreateGeometryIntent(c2), dim_type)
         else:
-            raise ValueError("kind must be diameter, radius, horizontal, vertical or aligned")
+            raise ValueError("kind must be diameter, radius, pcd, horizontal, vertical or aligned")
         clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"dimension {dim.Text.Text}" in c]
+        picked = "curves" if kind in ("horizontal", "vertical", "aligned") else "curve"
         return (f"{kind.capitalize()} dimension {dim.Text.Text} in {v.Name} "
-                f"(picked curve{'s' if kind not in ('diameter', 'radius') else ''} within {miss:.1f} mm); "
+                f"(picked {picked} within {miss:.1f} mm); text overlaps: {clashes or 'none'}")
+
+    def _nearest_circle_centerline(self, sheet, view, x: float, y: float):
+        """Circular centerline (e.g. a bolt circle) inside a view, nearest to a model-mm point."""
+        p = self._view_point(view, x, y)
+        rect = self._view_rect(view)
+        best, best_d = None, None
+        lines = sheet.Centerlines
+        for i in range(1, lines.Count + 1):
+            line = lines.Item(i)
+            try:
+                g = line.Geometry
+                center, radius = g.Center, g.Radius
+            except Exception:
+                continue  # straight centerline
+            if not (rect[0] <= center.X * 10 <= rect[2] and rect[1] <= center.Y * 10 <= rect[3]):
+                continue
+            d = abs(((p.X - center.X) ** 2 + (p.Y - center.Y) ** 2) ** 0.5 - radius)
+            if best_d is None or d < best_d:
+                best, best_d = line, d
+        if best is None:
+            raise ValueError(f"No circular centerline in view {view.Name}; run add_centerlines first")
+        return best, best_d * 10 / view.Scale
+
+    def add_hole_note(self, view: str, x: float, y: float, text_x: float, text_y: float) -> str:
+        """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for a patterned hole.
+        Points are model mm from the view center."""
+        doc = self.active_drawing()
+        sheet = doc.ActiveSheet
+        v = self._view(view)
+        curve, miss = self._nearest_curve(v, x, y, circular=True)
+        note = sheet.DrawingNotes.HoleThreadNotes.Add(self._view_point(v, text_x, text_y), curve)
+        quantity = self._profile_of(doc).get("hole_note_quantity")
+        if quantity:
+            note.FormattedQuantityNote = quantity
+            note.FormattedHoleThreadNote = "<QuantityNote/>" + note.FormattedHoleThreadNote
+        clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"hole note {note.Text.Text}" in c]
+        return (f"Hole note '{note.Text.Text}' in {v.Name} (picked hole edge within {miss:.1f} mm); "
                 f"text overlaps: {clashes or 'none'}")
+
+    def list_dimensions(self) -> list[dict]:
+        """Dimensions on the active sheet with their text, text center (mm) and nearest view."""
+        sheet = self.active_drawing().ActiveSheet
+        rects = {}
+        for i in range(1, sheet.DrawingViews.Count + 1):
+            v = sheet.DrawingViews.Item(i)
+            rects[v.Name] = self._view_rect(v)
+
+        def nearest_view(x, y):
+            def gap(r):
+                return (max(r[0] - x, 0, x - r[2]) ** 2 + max(r[1] - y, 0, y - r[3]) ** 2) ** 0.5
+            return min(rects, key=lambda n: gap(rects[n])) if rects else None
+
+        out = []
+        dims = sheet.DrawingDimensions.GeneralDimensions
+        for i in range(1, dims.Count + 1):
+            r = self._rect(dims.Item(i).Text)
+            x, y = (r[0] + r[2]) / 2, (r[1] + r[3]) / 2
+            out.append({"index": i, "text": dims.Item(i).Text.Text,
+                        "text_mm": [round(x, 1), round(y, 1)], "view": nearest_view(x, y)})
+        return out
+
+    def delete_dimension(self, indices: list[int]) -> str:
+        """Delete dimensions by the index list_dimensions reports."""
+        dims = self.active_drawing().ActiveSheet.DrawingDimensions.GeneralDimensions
+        count = dims.Count
+        bad = [i for i in indices if not 1 <= i <= count]
+        if bad:
+            raise ValueError(f"Dimension index {bad} out of range 1..{count}")
+        removed = []
+        for i in sorted(set(indices), reverse=True):
+            removed.append(dims.Item(i).Text.Text)
+            dims.Item(i).Delete()
+        return f"Deleted {len(removed)} dimension(s): {', '.join(reversed(removed))}"
 
     def set_title_block(self, fields: dict) -> str:
         """Write iProperties of the drawing and return what the title block now shows."""

@@ -599,15 +599,20 @@ def suppress_feature(indices: str, suppressed: bool = True) -> str:
 # are mm in model units from the view center (x right, y up on the sheet).
 
 @mcp.tool()
-def create_drawing(template: str = "iso", sheet_size: str = "A3") -> str:
-    """Create a drawing (.idw). Following drawing tools act on it.
+def create_drawing(profile: str = "default", template: str = "", sheet_size: str = "") -> str:
+    """Create a drawing (.idw) set up by a drawing profile. Following drawing tools act on it.
+
+    A profile (drawing_profiles/<name>.json, see docs/drawing-profiles.md) sets template,
+    sheet size, projection angle, units, dimension format and view label formats.
+    The default profile: third angle, mm, no trailing zeros, no sheet-zone references.
 
     Args:
-        template: "iso" for Inventor's own ISO template (first angle), or a full .idw path.
-                  Templates from older Inventor releases must be opened and saved once first.
-        sheet_size: A0, A1, A2, A3 or A4 (landscape as in the template).
+        profile: profile name.
+        template: optional .idw path overriding the profile's template. Templates from
+                  older Inventor releases must be opened and saved once first.
+        sheet_size: optional A0..A4 overriding the profile's sheet size.
     """
-    return inv.create_drawing(template, sheet_size)
+    return inv.create_drawing(profile, template, sheet_size)
 
 
 @mcp.tool()
@@ -631,7 +636,8 @@ def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
 @mcp.tool()
 def add_projected_view(parent: str, x: float, y: float, style: str = "from_base") -> str:
     """Orthographic or isometric view projected from a parent view, centered at (x, y).
-    With first angle projection a view placed below the parent shows the part from above.
+    Third angle (default profile): a view placed above the parent is the top view, to the
+    right the right-side view. First angle swaps the sides.
 
     Args:
         parent: name of the parent view (from list_views, e.g. "VIEW1").
@@ -696,12 +702,37 @@ def add_dimension(view: str, kind: str, x1: float, y1: float,
 
     Args:
         view: view name.
-        kind: diameter or radius (curve nearest x1, y1), or horizontal, vertical, aligned
-              (distance between the curves nearest x1, y1 and x2, y2).
+        kind: diameter or radius (curve nearest x1, y1); pcd (circular centerline such as
+              a bolt circle nearest x1, y1, after add_centerlines); or horizontal, vertical,
+              aligned (distance between the curves nearest x1, y1 and x2, y2).
         x1, y1, x2, y2: points on or near the curves to dimension.
         text_x, text_y: where the dimension text goes, same frame.
     """
     return inv.add_dimension(view, kind, x1, y1, x2, y2, text_x, text_y)
+
+
+@mcp.tool()
+def add_hole_note(view: str, x: float, y: float, text_x: float, text_y: float) -> str:
+    """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for patterned holes.
+    The quantity prefix comes from the drawing profile. Points are model mm from the view center."""
+    return inv.add_hole_note(view, x, y, text_x, text_y)
+
+
+@mcp.tool()
+def list_dimensions() -> str:
+    """Dimensions on the active sheet: index, text, text center (sheet mm), nearest view.
+    Use the index with delete_dimension, e.g. to drop a dimension shown twice."""
+    return json.dumps(inv.list_dimensions(), indent=1, ensure_ascii=False)
+
+
+@mcp.tool()
+def delete_dimension(indices: str) -> str:
+    """Delete dimensions by index from list_dimensions.
+
+    Args:
+        indices: comma-separated, e.g. "4,5".
+    """
+    return inv.delete_dimension([int(i.strip()) for i in indices.split(",")])
 
 
 @mcp.tool()
