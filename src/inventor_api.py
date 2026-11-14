@@ -1415,6 +1415,11 @@ class InventorConnection:
         sheet_size = sheet_size or prof.get("sheet_size", "")
         if not os.path.exists(template):
             raise RuntimeError(f"Drawing template not found: {template}")
+        template = os.path.normpath(template)
+        for i in range(1, self.app.Documents.Count + 1):
+            if os.path.normcase(self.app.Documents.Item(i).FullFileName) == os.path.normcase(template):
+                raise RuntimeError(f"The template {template} is open in Inventor; close it first, "
+                                   "Documents.Add refuses an open template.")
         try:
             doc = self._add_document(12292, template)
         except Exception as exc:
@@ -1524,10 +1529,32 @@ class InventorConnection:
         if orient is None:
             raise ValueError(f"Unknown orientation {orientation}. Use {', '.join(self._VIEW_ORIENTATIONS)}.")
         model = self._open_model(model_path)
+        first = sheet.DrawingViews.Count == 0
         view = sheet.DrawingViews.AddBaseView(
             model, self._sheet_point(x, y), scale, orient, self._style(style))
         rect = self._place_check(sheet, view)
-        return f"Base view {view.Name}: {orientation}, scale {scale:g}, {self._fmt_rect(rect)}"
+        note = ""
+        if first:
+            filled = self._apply_title_defaults(self.active_drawing())
+            note = f"; title block defaults filled: {', '.join(filled)}" if filled else ""
+        return f"Base view {view.Name}: {orientation}, scale {scale:g}, {self._fmt_rect(rect)}{note}"
+
+    def _apply_title_defaults(self, doc) -> list[str]:
+        """Fill the profile's title_block_defaults into fields that are still empty."""
+        defaults = self._profile_of(doc).get("title_block_defaults", {})
+        if not defaults:
+            return []
+        aliases = {k.upper(): v.upper() for k, v in self._profile_of(doc).get("title_block_aliases", {}).items()}
+        sheet = doc.ActiveSheet
+        available = self._title_block_fields(sheet)
+        todo = {}
+        for name, value in defaults.items():
+            field = aliases.get(name.upper(), name.upper())
+            if field in available and not sheet.TitleBlock.GetResultText(available[field][0]).strip():
+                todo[field] = value
+        if todo:
+            self.set_title_block(todo)
+        return list(todo)
 
     def add_projected_view(self, parent: str, x: float, y: float, style: str = "from_base") -> str:
         sheet = self.active_drawing().ActiveSheet
@@ -1605,6 +1632,14 @@ class InventorConnection:
                 boxes.append((f"detail fence label {v.Name}", (x - r - 10, y + r, x + r + 10, y + r + 12)))
             except Exception:
                 pass
+        for label, collection in (("feature control frame", sheet.FeatureControlFrames),
+                                  ("symbol", sheet.SketchedSymbols),
+                                  ("surface finish", sheet.SurfaceTextureSymbols)):
+            for i in range(1, collection.Count + 1):
+                try:
+                    boxes.append((f"{label} {i}", self._rect(collection.Item(i))))
+                except Exception:
+                    pass
         return boxes
 
     def _dimension_boxes(self, sheet):
@@ -1794,8 +1829,13 @@ class InventorConnection:
 
     def _nearest_curve(self, view, x: float, y: float, circular: bool = False):
         """Drawing curve of a view closest to a point given in model mm from the view center."""
+        curve, miss, _ = self._closest_on_curve(view, x, y, circular)
+        return curve, miss
+
+    def _closest_on_curve(self, view, x: float, y: float, circular: bool = False):
+        """(curve, distance in model mm, closest point on it as a sheet Point2d)."""
         p = self._view_point(view, x, y)
-        best, best_d = None, None
+        best, best_d, best_pt = None, None, None
         curves = view.DrawingCurves  # property get; calling it fails under late binding
         for i in range(1, curves.Count + 1):
             curve = curves.Item(i)
@@ -1804,21 +1844,25 @@ class InventorConnection:
                 g = segments.Item(j).Geometry
                 try:
                     center, radius = g.Center, g.Radius
-                    d = abs(((p.X - center.X) ** 2 + (p.Y - center.Y) ** 2) ** 0.5 - radius)
+                    dx, dy = p.X - center.X, p.Y - center.Y
+                    n = (dx * dx + dy * dy) ** 0.5 or 1e-12
+                    d = abs(n - radius)
+                    foot = (center.X + radius * dx / n, center.Y + radius * dy / n)
                     is_circle = True
                 except Exception:
                     a, b = g.StartPoint, g.EndPoint
                     vx, vy = b.X - a.X, b.Y - a.Y
                     t = max(0.0, min(1.0, ((p.X - a.X) * vx + (p.Y - a.Y) * vy) / ((vx * vx + vy * vy) or 1e-12)))
-                    d = ((p.X - a.X - t * vx) ** 2 + (p.Y - a.Y - t * vy) ** 2) ** 0.5
+                    foot = (a.X + t * vx, a.Y + t * vy)
+                    d = ((p.X - foot[0]) ** 2 + (p.Y - foot[1]) ** 2) ** 0.5
                     is_circle = False
                 if circular and not is_circle:
                     continue
                 if best_d is None or d < best_d:
-                    best, best_d = curve, d
+                    best, best_d, best_pt = curve, d, foot
         if best is None:
             raise ValueError(f"No {'circular ' if circular else ''}curve in view {view.Name}")
-        return best, best_d * 10 / view.Scale
+        return best, best_d * 10 / view.Scale, self._tg().CreatePoint2d(*best_pt)
 
     def add_dimension(self, view: str, kind: str, x1: float, y1: float,
                       x2: float | None = None, y2: float | None = None,
@@ -1948,6 +1992,141 @@ class InventorConnection:
             dims.Item(i).Delete()
         return f"Deleted {len(removed)} dimension(s): {', '.join(reversed(removed))}"
 
+    def move_dimension(self, index: int, text_x: float, text_y: float) -> str:
+        """Move the text of the dimension list_dimensions reports at index. The position is
+        model mm from the center of the dimension's view."""
+        sheet = self.active_drawing().ActiveSheet
+        dims = sheet.DrawingDimensions.GeneralDimensions
+        if not 1 <= index <= dims.Count:
+            raise ValueError(f"Dimension index {index} out of range 1..{dims.Count}")
+        dim = dims.Item(index)
+        view_name = self._tagged_view(dim)
+        if view_name is None:
+            raise ValueError(f"Dimension {index} has no recorded view; it was not made by these tools")
+        dim.Text.Origin = self._view_point(self._view(view_name), text_x, text_y)
+        clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"dimension {dim.Text.Text}" in c]
+        return f"Dimension {index} ({dim.Text.Text}) text moved; text overlaps: {clashes or 'none'}"
+
+    def set_tolerance(self, index: int, kind: str, upper: float = 0, lower: float = 0,
+                      fit: str = "") -> str:
+        """Tolerance on the dimension list_dimensions reports at index. Values in mm.
+        kind: symmetric (±upper), deviation (+upper / -lower), limits, fit (e.g. "H7"
+        for a hole, "h6" for a shaft), basic, reference, or default (none)."""
+        dims = self.active_drawing().ActiveSheet.DrawingDimensions.GeneralDimensions
+        if not 1 <= index <= dims.Count:
+            raise ValueError(f"Dimension index {index} out of range 1..{dims.Count}")
+        dim = dims.Item(index)
+        tol = dim.Tolerance
+        kind = kind.lower()
+        if kind == "symmetric":
+            tol.SetToSymmetric(upper / 10.0)
+        elif kind == "deviation":
+            tol.SetToDeviation(upper / 10.0, -abs(lower) / 10.0)
+        elif kind == "limits":
+            tol.SetToLimits(31237, upper / 10.0, -abs(lower) / 10.0)  # kLimitsStackedTolerance
+        elif kind == "fit":
+            if not fit:
+                raise ValueError('kind "fit" needs fit, e.g. "H7" or "h6"')
+            hole = fit if fit[0].isupper() else ""
+            shaft = "" if hole else fit
+            tol.SetToFits(31242, hole, shaft)  # kLimitsFitsLinearTolerance: "Ø30 H7", no limits
+        elif kind == "basic":
+            tol.SetToBasic()
+        elif kind == "reference":
+            tol.SetToReference()
+        elif kind == "default":
+            tol.SetToDefault()
+        else:
+            raise ValueError("kind must be symmetric, deviation, limits, fit, basic, reference or default")
+        return f"Dimension {index} ({dim.Text.Text}) tolerance set to {kind} {fit or ''}".rstrip()
+
+    _GDT = {
+        "straightness": 1, "flatness": 2, "circularity": 4, "profile_line": 8,
+        "profile_surface": 16, "angularity": 32, "perpendicularity": 64, "parallelism": 128,
+        "position": 256, "concentricity": 512, "circular_runout": 1024, "symmetry": 2048,
+        "total_runout": 4096, "cylindricity": 8192,
+    }
+
+    def _leader_points(self, view, x: float, y: float, text_x: float, text_y: float):
+        """Leader from the text position to the curve nearest (x, y), attached at the point
+        of the curve closest to (x, y); without that point it lands on the curve's start."""
+        curve, miss, foot = self._closest_on_curve(view, x, y)
+        points = self.app.TransientObjects.CreateObjectCollection()
+        points.Add(self._view_point(view, text_x, text_y))
+        points.Add(self.active_drawing().ActiveSheet.CreateGeometryIntent(curve, foot))
+        return points, miss
+
+    def add_gdt(self, view: str, x: float, y: float, text_x: float, text_y: float,
+                characteristic: str, tolerance: float, datums: str = "",
+                diameter_zone: bool = False) -> str:
+        """Feature control frame with a leader to the curve nearest (x, y).
+        datums: comma-separated datum letters in order of precedence, e.g. "A,B"."""
+        doc = self.active_drawing()
+        sheet = doc.ActiveSheet
+        v = self._view(view)
+        code = self._GDT.get(characteristic.lower())
+        if code is None:
+            raise ValueError(f"Unknown characteristic {characteristic}. Use {', '.join(self._GDT)}.")
+        points, miss = self._leader_points(v, x, y, text_x, text_y)
+        marker = "," if self._profile_of(doc).get("decimal_marker", "comma") == "comma" else "."
+        value = f"{tolerance:g}".replace(".", marker)
+        letters = [d.strip() for d in datums.split(",") if d.strip()][:3]
+        letters += [""] * (3 - len(letters))
+        rows = sheet.FeatureControlFrames.CreateFeatureControlFrameRows()
+        rows.Add(code, ("Ø" if diameter_zone else "") + value, "", *letters)
+        sheet.FeatureControlFrames.Add(points, rows)
+        frame = " | ".join([characteristic, ("Ø" if diameter_zone else "") + value] + [d for d in letters if d])
+        return f"Feature control frame [{frame}] in {v.Name} (leader on a curve within {miss:.1f} mm)"
+
+    _DATUM_SYMBOL = "Datum identifier (MCP)"
+
+    def _datum_definition(self, doc):
+        """Sketched symbol: square box with the datum letter as a prompt. The API has no
+        datum identifier call; the leader gets the filled datum triangle when placed."""
+        defs = doc.SketchedSymbolDefinitions
+        for i in range(1, defs.Count + 1):
+            if defs.Item(i).Name == self._DATUM_SYMBOL:
+                return defs.Item(i)
+        tg = self._tg()
+        definition = defs.Add(self._DATUM_SYMBOL)
+        sketch = definition.Edit()
+        h = 0.35  # 7 mm box
+        corners = [tg.CreatePoint2d(-h, -h), tg.CreatePoint2d(h, -h),
+                   tg.CreatePoint2d(h, h), tg.CreatePoint2d(-h, h)]
+        for i in range(4):
+            sketch.SketchLines.AddByTwoPoints(corners[i], corners[(i + 1) % 4])
+        box = sketch.TextBoxes.AddByRectangle(corners[0], corners[2], "<Prompt>DATUM</Prompt>")
+        box.HorizontalJustification = 19969  # kAlignTextCenter
+        box.VerticalJustification = 25601  # kAlignTextMiddle
+        definition.ExitEdit(True)
+        return definition
+
+    def add_datum(self, view: str, x: float, y: float, label: str,
+                  text_x: float, text_y: float) -> str:
+        """Datum identifier: letter in a box at (text_x, text_y), filled triangle on the
+        curve nearest (x, y). Points are model mm from the view center."""
+        doc = self.active_drawing()
+        sheet = doc.ActiveSheet
+        v = self._view(view)
+        points, miss = self._leader_points(v, x, y, text_x, text_y)
+        prompts = win32com.client.VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_BSTR, [label])
+        symbol = sheet.SketchedSymbols.AddWithLeader(self._datum_definition(doc), points, 0.0, 1.0, prompts)
+        symbol.Leader.ArrowheadType = 71955  # kDatum60FilledArrowheadType
+        return f"Datum {label} in {v.Name} (triangle on a curve within {miss:.1f} mm)"
+
+    def add_surface_finish(self, view: str, x: float, y: float, text_x: float, text_y: float,
+                           roughness: str = "Ra 3,2", removal: str = "required") -> str:
+        """Surface texture symbol with a leader to the curve nearest (x, y).
+        removal: required (machined), prohibited, or any."""
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        kind = {"any": 76801, "required": 76802, "prohibited": 76803}.get(removal.lower())
+        if kind is None:
+            raise ValueError("removal must be required, prohibited or any")
+        points, miss = self._leader_points(v, x, y, text_x, text_y)
+        sheet.SurfaceTextureSymbols.Add(points, kind, False, False, False, roughness)
+        return f"Surface finish {roughness} ({removal} removal) in {v.Name} (leader on a curve within {miss:.1f} mm)"
+
     def _title_block_fields(self, sheet) -> dict:
         """{FIELD: (text box, source)} for the fillable fields of the sheet's title block.
 
@@ -1995,7 +2174,11 @@ class InventorConnection:
         available = self._title_block_fields(sheet)
         if not available:
             raise ValueError("The active sheet has no title block with fillable fields")
-        wanted = {k.replace("_", " ").strip().upper(): str(v) for k, v in fields.items()}
+        aliases = {k.upper(): v.upper() for k, v in self._profile_of(doc).get("title_block_aliases", {}).items()}
+        wanted = {}
+        for k, v in fields.items():
+            name = k.replace("_", " ").strip().upper()
+            wanted[aliases.get(name, name)] = str(v)
         unknown = [k for k in wanted if k not in available]
         if unknown:
             raise ValueError(f"Title block has no field {unknown}. Fields: {sorted(available)}")

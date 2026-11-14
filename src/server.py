@@ -736,6 +736,66 @@ def delete_dimension(indices: str) -> str:
 
 
 @mcp.tool()
+def move_dimension(index: int, text_x: float, text_y: float) -> str:
+    """Move a dimension's text (index from list_dimensions), e.g. off another note.
+    text_x, text_y: model mm from the center of the dimension's view."""
+    return inv.move_dimension(index, text_x, text_y)
+
+
+@mcp.tool()
+def set_tolerance(index: int, kind: str, upper: float = 0, lower: float = 0, fit: str = "") -> str:
+    """Put a tolerance on a dimension (index from list_dimensions). Values in mm.
+
+    Args:
+        index: dimension index.
+        kind: symmetric (±upper), deviation (+upper / -lower), limits, fit, basic,
+              reference, or default (removes the tolerance).
+        upper, lower: tolerance values in mm (lower as a positive number).
+        fit: ISO fit for kind "fit": upper case for a hole ("H7"), lower case for a shaft ("h6").
+    """
+    return inv.set_tolerance(index, kind, upper, lower, fit)
+
+
+@mcp.tool()
+def add_gdt(view: str, x: float, y: float, text_x: float, text_y: float,
+            characteristic: str, tolerance: float, datums: str = "",
+            diameter_zone: bool = False) -> str:
+    """Feature control frame, with a leader to the curve nearest (x, y).
+
+    Args:
+        view: view name.
+        x, y: point on the controlled feature, model mm from the view center.
+        text_x, text_y: where the frame goes, same frame.
+        characteristic: straightness, flatness, circularity, cylindricity, profile_line,
+                        profile_surface, angularity, perpendicularity, parallelism,
+                        position, concentricity, symmetry, circular_runout, total_runout.
+        tolerance: tolerance value in mm, e.g. 0.05.
+        datums: datum letters in order of precedence, e.g. "A,B".
+        diameter_zone: True puts Ø before the value (cylindrical zone, e.g. for position).
+    """
+    return inv.add_gdt(view, x, y, text_x, text_y, characteristic, tolerance, datums, diameter_zone)
+
+
+@mcp.tool()
+def add_datum(view: str, x: float, y: float, label: str, text_x: float, text_y: float) -> str:
+    """Datum feature symbol: the letter in a box at (text_x, text_y), with a filled triangle
+    on the curve nearest (x, y). Points are model mm from the view center."""
+    return inv.add_datum(view, x, y, label, text_x, text_y)
+
+
+@mcp.tool()
+def add_surface_finish(view: str, x: float, y: float, text_x: float, text_y: float,
+                       roughness: str = "Ra 3,2", removal: str = "required") -> str:
+    """Surface texture symbol with a leader to the curve nearest (x, y).
+
+    Args:
+        roughness: e.g. "Ra 3,2" or "Ra 1,6".
+        removal: required (machined surface), prohibited, or any.
+    """
+    return inv.add_surface_finish(view, x, y, text_x, text_y, roughness, removal)
+
+
+@mcp.tool()
 def set_title_block(fields: str) -> str:
     """Fill title block fields by the names the title block shows, and return what it shows.
 

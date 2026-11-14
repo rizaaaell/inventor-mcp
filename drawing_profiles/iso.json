@@ -15,5 +15,13 @@
     "section_line": "<DrawingViewName/>",
     "detail_fence": "<DrawingViewName/>"
   },
-  "hole_note_quantity": "<Quantity/>x "
+  "hole_note_quantity": "<Quantity/>x ",
+  "title_block_aliases": {
+    "APPROVED BY": "CHECKED BY",
+    "CREATED BY": "ENGINEER"
+  },
+  "title_block_defaults": {
+    "DOCUMENT TYPE": "ENGINEERING DRAWING",
+    "APPROVED BY": "Rachmadi Norcahyo"
+  }
 }
