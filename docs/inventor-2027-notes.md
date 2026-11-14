@@ -152,6 +152,23 @@ The translators report `Activated = False` until used; call `Activate()` first.
   `All_Color_AS_Black`; `Vector_Resolution`. An A3 sheet comes out as one page with
   `MediaBox` 1191 x 842 pt.
 - `ActiveView.Fit()` then `SaveAsBitmap(path, w, h)` captures the whole sheet.
+- Drawing standard settings live on `StylesManager.ActiveStandardStyle`:
+  `FirstAngleProjection`, `LinearUnits`, `DecimalMarkerType`, and
+  `GetViewLabelDefaults` / `SetViewLabelDefaults(viewType, prefix, visible, text,
+  constrainToBorder, placeBelowView)` for view titles. Section line and detail circle
+  letters use `SetViewAnnotationDefaults(viewType, text)`; base and projected views
+  have no annotation and raise `E_INVALIDARG`. The defaults apply to views created
+  afterwards. Dimension format is on `ActiveObjectDefaults.Linear/Diameter/
+  RadialDimensionStyle`: `LinearPrecision` (41729 + decimal places) and
+  `TrailingZeroDisplay`.
+- `DrawingNotes.HoleThreadNotes.Add(position, holeEdgeCurve)` makes a hole note
+  ("Ø11,00 THRU"). The pattern count is not shown by default: prefix
+  `FormattedHoleThreadNote` with `<QuantityNote/>`; `FormattedQuantityNote`
+  (`<Quantity/>x`) sets its text.
+- Automated centerlines include the bolt circle of a circular pattern. A circular
+  `Centerline` has `Geometry.Center` / `Radius` in sheet cm, and
+  `GeneralDimensions.AddDiameter(textPos, sheet.CreateGeometryIntent(centerline))`
+  dimensions it (PCD).
 - The ISO view labels add sheet name and zone, e.g. `A-A ( 1 : 1 ) / .C5`; with an
   unnamed sheet that leaves a bare "/ .C5". Dimensions print two decimals with a comma
   (`Ø120,00`) from the ISO dimension style.
