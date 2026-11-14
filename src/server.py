@@ -36,7 +36,7 @@ def execute_python(code: str) -> str:
       tg   — TransientGeometry        math — math module
     Variables you assign persist between calls (one shared namespace).
     Internal COM units are CENTIMETERS — divide mm by 10.
-    Returns captured stdout (print your results!) or the traceback on error.
+    Returns captured stdout and stderr (print your results!) or the traceback on error.
     """
     import io, contextlib, traceback, math as _math
     ctx = {"inv": inv, "math": _math}
@@ -57,7 +57,7 @@ def execute_python(code: str) -> str:
     _exec_ns.update(ctx)
     buf = io.StringIO()
     try:
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             exec(compile(code, "<mcp>", "exec"), _exec_ns)
         out = buf.getvalue().strip()
         if len(out) > 6000:
@@ -93,8 +93,9 @@ def inspect() -> str:
 
 @mcp.tool()
 def list_edges(min_length: float = 0, max_count: int = 60) -> str:
-    """Compact edge table of body 1: '[i] L=200.0 mid=(0.0,-225.0,0.8)' per line.
-    Use to locate edges for flange/fillet/chamfer. min_length filters small edges (mm)."""
+    """Compact edge table of body 1: '[i] L=200.0 mid=(0.0,-225.0,0.8)' per line,
+    or '[i] circle R=20.0 c=(0.0,0.0,10.0) L=125.7' for a full circle.
+    Use to locate edges for flange/fillet/chamfer. min_length filters short edges (mm)."""
     return inv.list_edges(min_length=min_length, max_count=max_count)
 
 
@@ -304,10 +305,12 @@ def extrude(
 
     Args:
         distance: Extrusion distance in mm. Ignored when extent_type="all".
-        direction: Direction — positive, negative, or symmetric.
+        direction: Direction — positive, negative, or symmetric. Positive follows the sketch
+                   normal; on a body-face sketch that points out of the body, so cut with "negative".
         operation: Boolean operation — join, cut, intersect, surface, or new.
         sketch_index: Sketch number to extrude (0 = latest sketch).
-        extent_type: Extent type — "distance" (fixed distance, default) or "all" (through entire body).
+        extent_type: Extent type — "distance" (fixed distance, default) or "all" (through entire
+                     body, on the chosen side only; use direction="symmetric" for both sides).
     """
     idx = sketch_index if sketch_index > 0 else None
     return inv.extrude(distance, direction, operation, idx, extent_type=extent_type)
@@ -522,6 +525,7 @@ def find_edge(x: float = 0, y: float = 0, z: float = 0,
               use_x: bool = False, use_y: bool = False, use_z: bool = False,
               tolerance: float = 0.1) -> str:
     """Find an edge by its midpoint coordinates (mm). Returns edge index (string).
+    The midpoint is taken along the curve; a full circle matches by its center.
     Useful for flange — locate the edge to bend without printing all edges.
 
     Args:

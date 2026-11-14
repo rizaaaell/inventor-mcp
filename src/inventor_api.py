@@ -139,7 +139,7 @@ class InventorConnection:
             if not os.path.exists(template_file):
                 raise RuntimeError(f"Template not found: {template_file}")
 
-        doc = self.app.Documents.Add(12290, template_file, True)
+        doc = self._add_document(12290, template_file)
         if name:
             try:
                 doc.DisplayName = name
@@ -147,6 +147,17 @@ class InventorConnection:
                 pass  # DisplayName may be read-only before first save
         self.pin_document(doc)
         return f"Part created: {doc.DisplayName}"
+
+    def _add_document(self, doc_type: int, template_file: str):
+        """Documents.Add with dialogs suppressed.
+        A template whose styles differ from the style library otherwise opens a
+        modal "Style Conflict" dialog that blocks every COM call until clicked."""
+        previous = self.app.SilentOperation
+        self.app.SilentOperation = True
+        try:
+            return self.app.Documents.Add(doc_type, template_file, True)
+        finally:
+            self.app.SilentOperation = previous
 
     def pin_document(self, doc) -> None:
         """Make doc the target of every tool until a newer document replaces it."""
@@ -197,21 +208,25 @@ class InventorConnection:
         doc.Save()
         return f"Saved: {doc.FullFileName}"
 
+    # Translator add-ins by ClassId; display names changed in 2027 ("Translator: STEP").
+    _TRANSLATORS = {
+        "STEP": "{90AF7F40-0C01-11D5-8E83-0010B541CD80}",
+        "IGES": "{90AF7F44-0C01-11D5-8E83-0010B541CD80}",
+        "SAT": "{89162634-02B6-11D5-8E80-0010B541CD80}",
+        "STL": "{533E9A98-FC3B-11D4-8E7E-0010B541CD80}",
+    }
+
     def export_document(self, path: str, format: str = "STEP") -> str:
         doc = self.active_document()
         path = os.path.abspath(path)
 
         format_upper = format.upper()
-        if format_upper == "STEP":
-            translator = "Autodesk Inventor STEP Translator"
-        elif format_upper == "STL":
-            translator = "Autodesk Inventor STL Translator"
-        elif format_upper == "SAT":
-            translator = "Autodesk Inventor SAT Translator"
-        elif format_upper == "IGES":
-            translator = "Autodesk Inventor IGES Translator"
-        else:
+        class_id = self._TRANSLATORS.get(format_upper)
+        if class_id is None:
             raise ValueError(f"Unsupported format: {format}. Use STEP, STL, SAT, or IGES.")
+        translator = self.app.ApplicationAddIns.ItemById(class_id)
+        if not translator.Activated:
+            translator.Activate()
 
         context = self.app.TransientObjects.CreateTranslationContext()
         context.Type = 13059  # kFileBrowseIOMechanism
@@ -219,22 +234,10 @@ class InventorConnection:
         data_medium = self.app.TransientObjects.CreateDataMedium()
         data_medium.FileName = path
 
-        addins = self.app.ApplicationAddIns
-        found = None
-        for i in range(1, addins.Count + 1):
-            addin = addins.Item(i)
-            if hasattr(addin, "DisplayName") and translator.lower() in addin.DisplayName.lower():
-                found = addin
-                break
-
-        if found is None:
-            raise RuntimeError(f"Translator not found: {translator}")
-
-        if hasattr(found, "SaveCopyAs"):
-            found.SaveCopyAs(doc, context, options, data_medium)
-        else:
-            doc.SaveAs(path, False)
-
+        translator.HasSaveCopyAsOptions(doc, context, options)  # fills in the defaults
+        translator.SaveCopyAs(doc, context, options, data_medium)
+        if not os.path.exists(path):
+            raise RuntimeError(f"{format_upper} translator wrote no file at {path}")
         return f"Exported to: {path} ({format_upper})"
 
     # ---------- Sketches ----------
@@ -773,22 +776,36 @@ class InventorConnection:
             pass
         return info
 
+    @staticmethod
+    def _edge_geometry(edge):
+        """(length_mm, (x, y, z) mm, circle_radius_mm or None), length along the curve.
+        The point is the curve midpoint, or the center of a full circle."""
+        ev = edge.Evaluator
+        lo, hi = ev.GetParamExtents()
+        length = ev.GetLengthAtParam(lo, hi) * 10
+        if edge.GeometryType == 5124:  # kCircleCurve
+            g = edge.Geometry
+            return length, (g.Center.X * 10, g.Center.Y * 10, g.Center.Z * 10), g.Radius * 10
+        _, pt = ev.GetPointAtParam([(lo + hi) / 2], [0.0, 0.0, 0.0])
+        return length, tuple(v * 10 for v in pt), None
+
     def list_edges(self, body_index: int = 1, min_length: float = 0, max_count: int = 60) -> str:
-        """Compact edge table: '[i] L=200.0 mid=(0.0,-225.0,0.8)' one per line.
-        min_length filters out tiny edges (mm)."""
+        """Compact edge table, one per line: '[i] L=200.0 mid=(0.0,-225.0,0.8)'
+        or, for a full circle, '[i] circle R=20.0 c=(0.0,0.0,10.0) L=125.7'.
+        min_length filters out short edges (mm, measured along the curve)."""
         body = self.active_part().SurfaceBodies.Item(body_index)
         lines = []
         for i in range(1, body.Edges.Count + 1):
             try:
-                e = body.Edges.Item(i)
-                sv, ev = e.StartVertex.Point, e.StopVertex.Point
-                L = ((ev.X - sv.X) ** 2 + (ev.Y - sv.Y) ** 2 + (ev.Z - sv.Z) ** 2) ** 0.5 * 10
+                L, (x, y, z), radius = self._edge_geometry(body.Edges.Item(i))
                 if L < min_length:
                     continue
-                mx, my, mz = (sv.X + ev.X) / 2 * 10, (sv.Y + ev.Y) / 2 * 10, (sv.Z + ev.Z) / 2 * 10
-                lines.append(f"[{i}] L={L:.1f} mid=({mx:.1f},{my:.1f},{mz:.1f})")
+                if radius is None:
+                    lines.append(f"[{i}] L={L:.1f} mid=({x:.1f},{y:.1f},{z:.1f})")
+                else:
+                    lines.append(f"[{i}] circle R={radius:.1f} c=({x:.1f},{y:.1f},{z:.1f}) L={L:.1f}")
             except Exception:
-                lines.append(f"[{i}] (closed curve)")
+                lines.append(f"[{i}] ?")
             if len(lines) >= max_count:
                 lines.append(f"... truncated at {max_count}")
                 break
@@ -797,8 +814,8 @@ class InventorConnection:
     def list_faces(self, body_index: int = 1, min_area: float = 0, max_count: int = 60) -> str:
         """Compact face table: '[i] Plane A=90000 c=(0.0,225.0,12.5)' one per line.
         min_area in mm²."""
-        type_names = {5890: "Plane", 5891: "Cyl", 5892: "Cone", 5893: "Cone",
-                      5894: "Sphere", 5895: "Torus"}
+        type_names = {5890: "Plane", 5891: "Cyl", 5892: "EllCyl", 5893: "Cone",
+                      5894: "EllCone", 5895: "Torus", 5896: "Sphere", 5897: "BSpline"}
         body = self.active_part().SurfaceBodies.Item(body_index)
         lines = []
         for i in range(1, body.Faces.Count + 1):
@@ -1229,16 +1246,12 @@ class InventorConnection:
     ) -> int:
         """Locate a body edge by its midpoint coordinates (mm). Returns 1-based index.
         Pass any subset of x/y/z — None values are not constrained.
-        Useful for finding the edge to flange (no need to print all 20 edges).
+        The midpoint is taken along the curve; a full circle matches by its center.
         """
         comp = self.active_part()
         body = comp.SurfaceBodies.Item(body_index)
         for i in range(1, body.Edges.Count + 1):
-            e = body.Edges.Item(i)
-            sv, ev = e.StartVertex.Point, e.StopVertex.Point
-            mx = (sv.X + ev.X) / 2 * 10
-            my = (sv.Y + ev.Y) / 2 * 10
-            mz = (sv.Z + ev.Z) / 2 * 10
+            _, (mx, my, mz), _ = self._edge_geometry(body.Edges.Item(i))
             if x is not None and abs(mx - x) > tolerance: continue
             if y is not None and abs(my - y) > tolerance: continue
             if z is not None and abs(mz - z) > tolerance: continue
@@ -1263,7 +1276,7 @@ class InventorConnection:
         Useful for: finding a panel face to sketch on for sheet metal Cut.
         Centroid is computed as the average of the face's vertices.
 
-        surface_type: 5890=Plane (default), 5891=Cylinder, 5892=Cone, 5893=Sphere, 5894=Torus
+        surface_type: 5890=Plane (default), 5891=Cylinder, 5893=Cone, 5895=Torus, 5896=Sphere
         min_area: filter out small auxiliary faces (mm²)
         tolerance: how close the centroid must be (mm)
         """

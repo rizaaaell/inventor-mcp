@@ -2,29 +2,110 @@
 
 What was observed while driving Inventor 2027.1 through `pywin32` late binding.
 Companion to `inventor-api-notes.md` (written for 2026). Everything here was seen
-working or failing in a live session; nothing is taken from documentation.
+working or failing in a live session, or read from the 2027 type library.
 
-Enum values below were confirmed by use, not yet checked against the 2027 type
-library. That check is a phase 1 task.
+`tests/audit_tools.py` exercises every MCP tool; rerun it after an Inventor update.
 
-## Still valid from the 2026 notes
+## Enum values
 
-Used unchanged in 2027.1 and behaved as documented:
+Checked against `D:\Inventor 2027\Bin\RxInventor.tlb`. The library was read with
+`pythoncom.LoadTypeLib`, which needs no Inventor connection and leaves no `gen_py`
+cache behind (unlike the gencache probe in the 2026 notes).
 
-- `kPartDocumentObject = 12290`
-- Extent directions `20993 / 20994 / 20995`, operations `20481` (join), `20482` (cut), `20485` (new body)
-- `ChamferFeatures.AddUsingDistance(EdgeCollection, cm)`
-- `RevolveFeatures.AddFull` for full revolves, partial revolves by angle
-- Tapped holes through `hole(tapped=True)`: M10x1.5 is cut at the 8.376 mm minor diameter
+All constants in `src/inventor_api.py` match, except the surface type table:
 
-## Enum values first used in 2027
-
-| Value | Meaning | Where it was used |
+| Value | 2027 type library | Old wrapper and 2026 notes |
 |---|---|---|
-| `12291` | `kAssemblyDocumentObject` | `Documents.Add` with `Metric\Standard (mm).iam` |
-| `5124` | circular curve (`Edge.GeometryType`) | picking circular edges for insert constraints |
-| `5891` | cylinder (`Face.SurfaceType`) | picking axle and bore faces for axis mates |
-| `11778` | healthy (`HealthStatus` of a constraint or feature) | constraint health check |
+| 5890 | `kPlaneSurface` | plane |
+| 5891 | `kCylinderSurface` | cylinder |
+| 5892 | `kEllipticalCylinderSurface` | cone |
+| 5893 | `kConeSurface` | cone / sphere |
+| 5894 | `kEllipticalConeSurface` | sphere / torus |
+| 5895 | `kTorusSurface` | torus |
+| 5896 | `kSphereSurface` | missing |
+| 5897 | `kBSplineSurface` | missing |
+
+`list_faces` and `find_face` are fixed. `skills/inventor-modeling/SKILL.md` and
+`docs/inventor-api-notes.md` still carry the old table; the skill is updated in phase 6.
+
+Other values confirmed in the library:
+
+| Value | Name |
+|---|---|
+| 12290 / 12291 / 12292 / 12293 | `kPart` / `kAssembly` / `kDrawing` / `kPresentationDocumentObject` |
+| 20993 / 20994 / 20995 | positive / negative / symmetric extent direction |
+| 20481 – 20485 | join, cut, intersect, surface, new body |
+| 19201 / 19202 / 19203 | horizontal / vertical / aligned dimension |
+| 13059 | `kFileBrowseIOMechanism` |
+| 47363 | `kOptimizedCompute` |
+| 75521 | `kHeightDatumOuter` (flange height datum) |
+| 5124 | `kCircleCurve` (5123 line, 5125 arc) |
+| 11778 | `kUpToDateHealth` |
+| 11269 / 11272 | `kMillimeterLengthUnits` / `kInchLengthUnits` |
+
+## Dialogs that block automation
+
+- Creating a document from `Metric\Standard (mm).ipt` can open a modal **Style
+  Conflict** dialog: the template's `Dimension: Default - mm (ANSI) - 3DA` style
+  differs from the style library. Every COM call waits until someone clicks OK; the
+  MCP request times out and the server reports "Not connected to Inventor". In the
+  audit it showed up on the first document of a fresh Inventor session.
+  Fixed: `create_part` sets `Application.SilentOperation = True` around
+  `Documents.Add`, which accepts the dialog's default.
+- The call that timed out still completes inside Inventor afterwards. That left an
+  extra unnamed `PartN` document open more than once.
+- `connect()` starts a new Inventor when none is running. That instance once sat at
+  "Not Responding" for over five minutes; most likely a startup dialog waiting.
+
+## Translators
+
+Display names changed in 2027 to `Translator: STEP`, `Translator: IGES`,
+`Translator: SAT`, `Translator: STL Export`, so the old name match found nothing and
+`export_document` failed for every format. Look add-ins up by ClassId with
+`ApplicationAddIns.ItemById`:
+
+| Format | ClassId |
+|---|---|
+| STEP | `{90AF7F40-0C01-11D5-8E83-0010B541CD80}` |
+| IGES | `{90AF7F44-0C01-11D5-8E83-0010B541CD80}` |
+| SAT | `{89162634-02B6-11D5-8E80-0010B541CD80}` |
+| STL | `{533E9A98-FC3B-11D4-8E7E-0010B541CD80}` |
+| PDF | `{0AC6FD96-2F4D-42CE-8BE0-8AEA580399E4}` (for phase 2) |
+| DWG / DXF | `{C24E3AC2-122E-11D5-8E91-0010B541CD80}` / `{C24E3AC4-...}` |
+
+The translators report `Activated = False` until used; call `Activate()` first.
+`HasSaveCopyAsOptions(doc, context, options)` fills `options` with the defaults.
+
+## Edge geometry
+
+- `edge.Evaluator.GetParamExtents()` returns `(min, max)`.
+- `GetLengthAtParam(min, max)` returns the length along the curve in cm.
+- `GetPointAtParam([t], [0.0, 0.0, 0.0])` returns `((t,), (x, y, z))`.
+- A full circle has one vertex, so start and end coincide. Measuring between the
+  vertices gave length 0 and a "midpoint" on the seam; `list_edges` and `find_edge`
+  now use the evaluator and match full circles by their center.
+
+## Part modeling behaviour
+
+- Positive extent direction follows the sketch normal. On a sketch placed on a body
+  face the normal points out of the body: a positive cut removes nothing, silently.
+  Cut with `direction="negative"`.
+- `AddByThroughAllExtent` cuts on the chosen side only; symmetric cuts both sides.
+- A sketch on a body face of a centered block had its origin at the world origin
+  projected onto the face; check with `SketchToModelSpace` rather than assuming.
+- A chamfer on one line of a loop that is tangent to fillets runs around the whole
+  tangent chain.
+- `hole()` drills from the XY plane in the negative direction and still cuts a body
+  that sits above the plane, for through-all and for blind tapped holes.
+- A blind tapped hole from `hole()` removed exactly the minor-diameter cylinder:
+  no drill point in the volume.
+- Tapped holes are cut at the minor diameter (M8x1.25: 6.647 mm, M10x1.5: 8.376 mm).
+- `set_sheet_metal_thickness` works on an en-US locale: the Thickness parameter
+  reads back the requested value.
+- A join extrude that does not touch the existing body is fine once a later
+  feature connects the pieces. An extrude with operation `new` makes a second body,
+  and later cuts and `inspect` only see body 1.
+- Sketches on the XZ plane are mirrored (sketch X is world -X).
 
 ## Assembly API
 
@@ -49,33 +130,14 @@ Used unchanged in 2027.1 and behaved as documented:
 - `MeasureTools.GetMinimumDistance(a, b)` returns a tuple; the distance in cm is item 0.
 - `Occurrences.Add` fails with `E_INVALIDARG (-2147024809)` when the file does not
   exist on disk, which includes a part that was built but never saved.
-- A join extrude that does not touch the existing body is fine once a later
-  feature connects the pieces. An extrude with operation `new` makes a second
-  body, and later cuts and `inspect` only see body 1.
 
-## Wrapper behaviour found in 2027 sessions
+## Wrapper fixes in phase 1
 
-- **Tools followed the active tab.** Every wrapper method resolved
-  `app.ActiveDocument`, so activating another open document between two calls
-  made `save_document` write the wrong part under the requested file name.
-  Fixed: `create_part` pins its document, and `active_document()` returns the
-  pinned one and re-activates it. A document opened after the pin takes over when
-  it becomes active. `inv.release_document()` drops the pin by hand.
-- **`list_edges` reports length 0 for closed circular edges**, so any
-  `min_length` filter hides them. Open.
-- **`execute_python` captures stdout only.** `traceback.print_exc()` is lost;
-  use `print(traceback.format_exc())`. Open.
-- **Sketches on the XZ plane are mirrored** (sketch X is world -X), as the 2026
-  notes say. Confirmed in 2027.
-
-## Stalls and popups
-
-- A modal dialog in Inventor blocks every COM call until someone clicks it. The
-  MCP request then times out and the server reports "Not connected to Inventor".
-  The dialog has to be answered by hand.
-- The call that timed out usually still completes inside Inventor. After a
-  timeout on `create_part` there can be an extra unnamed `PartN` document open.
-- `connect()` starts a new Inventor when none is running. That instance sat at
-  "Not Responding" for over five minutes once, with `tests/smoke.py` waiting on it.
-- One `Documents.Add` took 19.8 s right after a timed-out call; the same call
-  took 0.1 s a minute later. Cause not found.
+- **Tools followed the active tab.** Activating another document between two calls
+  made `save_document` write the wrong part. `create_part` now pins its document;
+  a document opened after the pin takes over once it is active.
+  `inv.release_document()` drops the pin by hand.
+- **`execute_python` lost stderr.** It now captures stdout and stderr.
+- **`export_document`** found no translator (see above) and fell back to
+  `doc.SaveAs` for add-ins without `SaveCopyAs`, which would have written an `.ipt`
+  under the export name. The fallback is gone; a missing output file raises.
