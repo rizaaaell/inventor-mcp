@@ -625,6 +625,41 @@ def drawing():
         return out
     check("list_dimensions + delete_dimension", delete_dims)
 
+    def tolerance_and_move():
+        listed = json.loads(srv.list_dimensions())
+        target = next(d for d in listed if d["view"] == state["top"] and d["text"] == "100")
+        out = srv.set_tolerance(target["index"], "symmetric", 0.1)
+        moved = srv.move_dimension(target["index"], 0, -32)
+        after = next(d for d in json.loads(srv.list_dimensions()) if d["index"] == target["index"])
+        assert after["text_mm"] != target["text_mm"], "text did not move"
+        return f"{out}; {moved}"
+    check("set_tolerance + move_dimension", tolerance_and_move)
+
+    def fit():
+        listed = json.loads(srv.list_dimensions())
+        target = next(d for d in listed if d["view"] == state["front"] and d["text"].startswith("n20"))
+        out = srv.set_tolerance(target["index"], "fit", fit="H7")
+        text = next(d["text"] for d in json.loads(srv.list_dimensions()) if d["index"] == target["index"])
+        assert text.endswith("H7"), text
+        return out
+    check("set_tolerance fit", fit)
+
+    def gdt():
+        sheet = srv.inv.active_drawing().ActiveSheet
+        frames, symbols, finishes = (sheet.FeatureControlFrames.Count, sheet.SketchedSymbols.Count,
+                                     sheet.SurfaceTextureSymbols.Count)
+        outs = [
+            srv.add_datum(state["top"], 50, 0, "A", 62, 10),
+            srv.add_gdt(state["top"], -50, 0, -70, 25, "perpendicularity", 0.05, "A"),
+            srv.add_gdt(state["front"], 35, 4, 58, 52, "position", 0.2, "A", diameter_zone=True),
+            srv.add_surface_finish(state["top"], 0, 16, 20, 26, "Ra 3,2"),
+        ]
+        assert (sheet.FeatureControlFrames.Count, sheet.SketchedSymbols.Count,
+                sheet.SurfaceTextureSymbols.Count) == (frames + 2, symbols + 1, finishes + 1), "counts"
+        assert "Ø0,2" in outs[2], outs[2]
+        return " / ".join(o.split(" (")[0] for o in outs)
+    check("add_datum + add_gdt + add_surface_finish", gdt)
+
     def png():
         path = OUT / "audit_drawing.png"
         out = srv.export_sheet_png(str(path), 1600)

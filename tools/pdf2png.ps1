@@ -1,5 +1,8 @@
 param([string]$Pdf, [string]$OutDir, [int]$Width = 2000, [int]$MaxPages = 3)
 # Render PDF pages to PNG with the Windows built-in PDF engine (Windows.Data.Pdf).
+# StorageFile only takes absolute Windows paths.
+$Pdf = (Resolve-Path $Pdf).Path
+$OutDir = [IO.Path]::GetFullPath($OutDir)
 Add-Type -AssemblyName System.Runtime.WindowsRuntime
 $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
 $null = [Windows.Data.Pdf.PdfDocument, Windows.Data.Pdf, ContentType = WindowsRuntime]

@@ -48,12 +48,27 @@ print(srv.delete_dimension(",".join(map(str, duplicates))))
 print(srv.add_hole_note(front, 0, 50.5, -62, 68))
 print(srv.add_dimension(front, "pcd", 0, -45, text_x=-58, text_y=-72))
 
+# Tolerances and GD&T. These are proposals for a shaft coupling flange, not values
+# from a released design: bore H7 on the shaft, mating face A, bore axis B; face A flat
+# and square to the bore, bolt holes located from A and B.
+bore = next(d["index"] for d in json.loads(srv.list_dimensions()) if d["view"] == front and d["text"] == "n30")
+print(srv.set_tolerance(bore, "fit", fit="H7"))
+print(srv.move_dimension(bore, 62, -75))
+print(srv.add_datum(section, 25, 40, "A", 42, 62))
+print(srv.add_datum(section, -12, -15, "B", -50, -8))  # leader enters through the open bore
+print(srv.add_gdt(section, 25, -40, 45, -72, "flatness", 0.03))
+print(srv.add_gdt(section, 25, -48, 45, -84, "perpendicularity", 0.05, "B"))
+print(srv.add_gdt(front, 0, 50.5, -78, 58, "position", 0.2, "A,B", diameter_zone=True))
+print(srv.add_surface_finish(section, 25, -10, 50, -20, "Ra 3,2"))
+print(srv.add_surface_finish(section, -12, 15, -50, 12, "Ra 1,6"))
+
 print(srv.set_title_block(json.dumps({
     "TITLE": "Flens Kopling",
     "PART NUMBER": "KF-001",
     "ENGINEER": "Rizal",
     "REVISION NUMBER": "1",
     "MATERIAL": "Aluminum 6061",
+    "SURFACE FINISH": "Ra 6,3",
 })))
 layout = json.loads(srv.list_views())
 print("problems:", layout["problems"] or "none")
