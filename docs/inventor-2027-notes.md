@@ -410,6 +410,27 @@ Verified while building the phase 3 tools (2027.1):
 - Two constraints with the same name raise `E_INVALIDARG` on `Name`; the second flush
   between one pair of components needs its own name.
 
+## Drawing details found on the wheel hub drawings
+
+- `GeneralDimension.Precision` is settable per dimension. The profile's one decimal turned
+  121.42 into "121,4"; `add_dimension` and `retrieve_dimensions` now raise the precision to
+  what `ModelValue` needs, up to two decimals (three would tighten the general tolerance).
+  `ModelValue` showed 68.835 where the design said 68.84.
+- `HoleThreadNotes.Add(position, curve)` also takes the line of a cosmetic thread seen from
+  the side and prints "M42x1.5 - 6g"; setting `FormattedQuantityNote` on such a note fails.
+- Holes cut in one sketch get no bolt circle from automated centerlines.
+  `Centerlines.AddCenteredPattern(centerIntent, ObjectCollection of hole intents, None, None,
+  True)` with `kCenterPointIntent` (57860) intents draws it.
+- A diameter dimension's leader runs from the text towards the circle centre; where it meets
+  the circle is decided by the text position, not by the intent point. Put the text on the
+  angle the arrow should land on (e.g. between two bolt holes).
+- `DrawingView.SetVisibility(occurrence, False)` hides a component in one view only; the
+  view box shrinks to what is left. Occurrences hidden in the assembly's design view can
+  still show in a drawing view.
+- `PartsListRow.Visible = False` leaves a row out; `PartsList.Renumber()` closes the gap.
+- `DrawingWeldingSymbol` has no `RangeBox`; `Position` is the knee of the reference line.
+- A weld symbol needs no weldment: `Sheet.WeldingSymbols.Add` works on any assembly view.
+
 ## Closing documents
 
 - `Document.Close` on a part an open assembly or drawing still uses shows an

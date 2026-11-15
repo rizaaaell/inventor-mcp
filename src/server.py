@@ -734,7 +734,9 @@ def add_dimension(view: str, kind: str, x1: float, y1: float,
 @mcp.tool()
 def add_hole_note(view: str, x: float, y: float, text_x: float, text_y: float,
                   second_line: str = "", count: int = 0) -> str:
-    """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for patterned holes.
+    """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for patterned holes, or a
+    thread note on a threaded shaft seen from the side (point on the thread line), e.g.
+    "M42x1.5 - 6g".
     The quantity prefix comes from the drawing profile and only counts holes of one
     patterned feature; count > 0 writes "<count>x" for holes made as separate features.
     second_line goes under it, e.g. "EQ SP ON PCD Ø90" to give the bolt circle in the same
@@ -1037,7 +1039,7 @@ def pattern_component(occurrences: str, axis_occurrence: str, axis: str, count: 
 
 
 @mcp.tool()
-def add_parts_list(view: str, x: float = 0, y: float = 0, level: str = "parts") -> str:
+def add_parts_list(view: str, x: float = 0, y: float = 0, level: str = "parts", hide: str = "") -> str:
     """Parts list (ITEM, QTY, PART NUMBER, DESCRIPTION) of an assembly view.
 
     Args:
@@ -1045,8 +1047,24 @@ def add_parts_list(view: str, x: float = 0, y: float = 0, level: str = "parts") 
         x, y: top right corner on the sheet, mm. Leave both 0 to stack it on the title
               block against the right border, as the Arjuna drawings do.
         level: parts (parts only), structured (first level) or all_levels.
+        hide: rows to leave out, by part number or file name separated by ';', e.g. an
+              unused variant part kept in the assembly. The other rows are renumbered.
     """
-    return inv.add_parts_list(view, x, y, level)
+    return inv.add_parts_list(view, x, y, level, hide)
+
+
+@mcp.tool()
+def set_component_visibility(view: str, occurrences: str, visible: bool = False) -> str:
+    """Hide (or show) assembly components in one drawing view only; the assembly file and
+    its design views stay as they are. Use it for variant or reference parts that should
+    not be drawn. Then leave them out of the parts list with add_parts_list(hide=...).
+
+    Args:
+        view: view name.
+        occurrences: comma-separated component names, e.g. "Shaft_variant:1".
+        visible: False hides, True shows.
+    """
+    return inv.set_component_visibility(view, occurrences, visible)
 
 
 @mcp.tool()

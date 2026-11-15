@@ -64,7 +64,7 @@ Do not use `win32com.client.gencache.EnsureDispatch` against the same Python ins
 `gen_py` cache breaks `GetActiveObject`. Read `RxInventor.tlb` with
 `pythoncom.LoadTypeLib` instead (see the modeling skill).
 
-## Tools (82)
+## Tools (83)
 
 All lengths in mm, angles in degrees.
 
@@ -110,6 +110,7 @@ assemblies, design view, turned iso camera), `add_projected_view`, `add_section_
 `delete_dimension`, `move_dimension`, `set_tolerance` (symmetric, deviation, limits, ISO
 fits, basic), `add_hole_note`, `add_chamfer_note`, `add_gdt`, `add_datum`,
 `add_surface_finish`, `list_notes`, `delete_note`, `move_view`, `delete_view`,
+`set_component_visibility`,
 `set_title_block` (MATERIAL always stated), `add_parts_list`, `add_balloons`, `list_views`
 (layout checker), `export_sheet_png`, `export_pdf`.
 
@@ -145,7 +146,7 @@ With Inventor running:
 
 ```
 python -X utf8 -u tests/smoke.py        # 8 regression cases, volumes and drawing layout
-python -X utf8 -u tests/audit_tools.py  # every tool, 115 checks
+python -X utf8 -u tests/audit_tools.py  # every tool, 117 checks
 ```
 
 Test output goes to `C:\inventor-test\`. `experiments/` holds the full scripts behind the

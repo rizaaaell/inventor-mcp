@@ -30,6 +30,10 @@ drawing** carries the weld, the cosmetic weld marks the joint in the model.
 - An assembly that is partly welded: the welded sub-assembly gets its own assembled
   drawing; the top-level drawing is exploded and shows that sub-assembly as one item.
 
+An assembly that was not built as a weldment can still be drawn as a welded assembly:
+`add_weld_symbol` works on any assembly view. Model the welds as a weldment only when the
+cosmetic welds (or the weld mass) are wanted in the model.
+
 ## Workflow
 
 ```text

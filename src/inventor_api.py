@@ -1809,6 +1809,13 @@ class InventorConnection:
             r = self._balloon_diameter(b.Style) / 2
             x, y = b.Position.X * 10, b.Position.Y * 10
             boxes.append((f"balloon {b.BalloonValueSets.Item(1).ItemNumber}", (x - r, y - r, x + r, y + r)))
+        welds = sheet.WeldingSymbols
+        for i in range(1, welds.Count + 1):
+            # No RangeBox either; Position is where the reference line meets the leader, and
+            # the line runs to one side, so the box covers both.
+            p = welds.Item(i).Position
+            x, y = p.X * 10, p.Y * 10
+            boxes.append((f"weld symbol {i}", (x - 22, y - 7, x + 22, y + 7)))
         return boxes
 
     @staticmethod
@@ -1904,6 +1911,7 @@ class InventorConnection:
         obstacles = [box for _, box in self._annotation_boxes(sheet)]
         for d in new:
             self._tag_view(d, v.Name)
+            self._fit_precision(d)
         moved = self._untangle(new, v, obstacles)
         clashes = self._clashes(self._text_boxes(sheet))
         values = ", ".join(d.Text.Text for d in new)
@@ -1923,11 +1931,60 @@ class InventorConnection:
         v.SetAutomatedCenterlineSettings(settings)
         overshoot = float(self._profile_of(doc).get("centerline_overshoot_mm", 3))
         extended, added = self._complete_axes(sheet, v, overshoot)
+        bolt_circles = self._bolt_circles(sheet, v)
         marked = self._extend_centermarks(sheet, v, overshoot)
         return (f"Centerlines on {v.Name}: +{sheet.Centerlines.Count - lines} centerline(s), "
                 f"+{sheet.Centermarks.Count - marks} centermark(s); {extended} axis line(s) "
                 f"stretched and {added} added to span their cylinders + {overshoot:g} mm; "
-                f"{marked} center mark(s) run past their circle")
+                f"{bolt_circles} bolt circle(s) added; {marked} center mark(s) run past their circle")
+
+    def _bolt_circles(self, sheet, view) -> int:
+        """Pitch circle through three or more equal holes spaced evenly around a circle centre.
+
+        Automated centerlines draw one only for a patterned feature; holes cut in one sketch
+        get none, and add_dimension "pcd" needs it."""
+        circles = []
+        curves = view.DrawingCurves
+        for i in range(1, curves.Count + 1):
+            c = curves.Item(i)
+            try:
+                if c.CurveType != 5124 or c.Segments.Count != 1 or c.Segments.Item(1).HiddenLine:
+                    continue
+                g = c.Segments.Item(1).Geometry
+                circles.append((c, g.Center.X, g.Center.Y, g.Radius))
+            except Exception:
+                continue
+        existing = []
+        for i in range(1, sheet.Centerlines.Count + 1):
+            try:
+                g = sheet.Centerlines.Item(i).Geometry
+                existing.append((g.Center.X, g.Center.Y, g.Radius))
+            except Exception:
+                continue
+        made = 0
+        radii = sorted({round(r, 3) for _, _, _, r in circles})
+        for radius in radii:
+            holes = [c for c in circles if abs(c[3] - radius) < 1e-3]
+            if len(holes) < 3:
+                continue
+            for center in circles:
+                if center in holes:
+                    continue
+                d = [((h[1] - center[1]) ** 2 + (h[2] - center[2]) ** 2) ** 0.5 for h in holes]
+                if min(d) < 1e-3 or max(d) - min(d) > 1e-3:
+                    continue
+                if any(abs(e[0] - center[1]) < 1e-3 and abs(e[1] - center[2]) < 1e-3
+                       and abs(e[2] - d[0]) < 1e-3 for e in existing):
+                    break
+                col = self.app.TransientObjects.CreateObjectCollection()
+                for h in holes:
+                    col.Add(sheet.CreateGeometryIntent(h[0], 57860))  # kCenterPointIntent
+                sheet.Centerlines.AddCenteredPattern(sheet.CreateGeometryIntent(center[0], 57860),
+                                                     col, None, None, True)
+                existing.append((center[1], center[2], d[0]))
+                made += 1
+                break
+        return made
 
     def _extend_centermarks(self, sheet, view, overshoot_mm: float) -> int:
         """Run each center mark's extension lines past the largest circle around it.
@@ -2160,6 +2217,8 @@ class InventorConnection:
             dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1), sheet.CreateGeometryIntent(c2), dim_type)
         else:
             raise ValueError("kind must be diameter, radius, pcd, angle, horizontal, vertical or aligned")
+        if kind != "angle":
+            self._fit_precision(dim)
         if prefix:
             dim.Text.FormattedText = prefix + dim.Text.FormattedText
         self._tag_view(dim, v.Name)
@@ -2167,6 +2226,23 @@ class InventorConnection:
         picked = "curves" if kind in ("horizontal", "vertical", "aligned", "angle") else "curve"
         return (f"{kind.capitalize()} dimension {dim.Text.Text} in {v.Name} "
                 f"(picked {picked} within {miss:.1f} mm); text overlaps: {clashes or 'none'}")
+
+    @staticmethod
+    def _fit_precision(dim, most: int = 2) -> None:
+        """Show as many decimals as the model value needs (121,42 rather than 121,4), up to
+        two: more would also tighten the general tolerance the title block ties to them."""
+        try:
+            if "°" in dim.Text.Text:
+                return  # angles: ModelValue is in radians
+            value = abs(dim.ModelValue) * 10
+            current = dim.Precision
+        except Exception:
+            return
+        for p in range(current, most + 1):
+            if abs(value - round(value, p)) < 5e-4 or p == most:
+                if p > current:
+                    dim.Precision = p
+                return
 
     def _nearest_circle_centerline(self, sheet, view, x: float, y: float):
         """Circular centerline (e.g. a bolt circle) inside a view, nearest to a model-mm point."""
@@ -2192,21 +2268,33 @@ class InventorConnection:
 
     def add_hole_note(self, view: str, x: float, y: float, text_x: float, text_y: float,
                       second_line: str = "", count: int = 0) -> str:
-        """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for a patterned hole.
+        """Hole or thread note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for a patterned
+        hole, or on a thread seen from the side ("M42x1.5 - 6g").
         second_line goes under it, e.g. "EQ SP ON PCD Ø90". count > 0 writes "<count>x" for
         holes made as separate features, which Inventor does not count.
         Points are model mm from the view center."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
-        curve, miss = self._nearest_curve(v, x, y, circular=True)
+        try:
+            curve, miss = self._nearest_curve(v, x, y, circular=True)
+        except ValueError:
+            curve, miss = None, None
+        if miss is None or miss > 1.0:
+            # A thread seen from the side is a line, not a circle: note it there.
+            line, line_miss = self._nearest_curve(v, x, y)
+            if miss is None or line_miss < miss:
+                curve, miss = line, line_miss
         note = sheet.DrawingNotes.HoleThreadNotes.Add(self._view_point(v, text_x, text_y), curve)
         quantity = self._profile_of(doc).get("hole_note_quantity")
         if count > 0:
             note.FormattedHoleThreadNote = f"{count}x " + note.FormattedHoleThreadNote
         elif quantity:
-            note.FormattedQuantityNote = quantity
-            note.FormattedHoleThreadNote = "<QuantityNote/>" + note.FormattedHoleThreadNote
+            try:
+                note.FormattedQuantityNote = quantity
+                note.FormattedHoleThreadNote = "<QuantityNote/>" + note.FormattedHoleThreadNote
+            except Exception:
+                pass  # a thread note on a shaft has no hole count
         if second_line:
             # Inside the last style run, or the line falls back to a large default font.
             head, sep, tail = note.FormattedHoleThreadNote.rpartition("</StyleOverride>")
@@ -3042,9 +3130,31 @@ class InventorConnection:
             view._oleobj_.Invoke(dispid, 0, pythoncom.DISPATCH_PROPERTYGET, True, occurrence))
         return [curves.Item(i) for i in range(1, curves.Count + 1)]
 
-    def add_parts_list(self, view: str, x: float = 0, y: float = 0, level: str = "parts") -> str:
+    def set_component_visibility(self, view: str, occurrences: str, visible: bool = False) -> str:
+        """Show or hide assembly components in one drawing view only; the assembly and its
+        design views are not changed. occurrences: comma-separated names."""
+        v = self._view(view)
+        model = v.ReferencedDocumentDescriptor.ReferencedDocument
+        if model.DocumentType != 12291:
+            raise ValueError(f"View {view} does not show an assembly")
+        names = re.findall(r"\s*(.+?:\d+)\s*(?:,|$)", occurrences)
+        found = {o.Name: o for o in self._components(model.ComponentDefinition)}
+        done = []
+        for name in names:
+            occ = next((o for n, o in found.items() if self._same_name(n, name)), None)
+            if occ is None:
+                raise ValueError(f"No component {name!r} in {model.DisplayName}: {sorted(found)}")
+            v.SetVisibility(occ, bool(visible))
+            done.append(occ.Name)
+        return (f"{'Shown' if visible else 'Hidden'} in {v.Name}: {', '.join(done)}; "
+                f"view now {self._fmt_rect(self._view_rect(v))}")
+
+    def add_parts_list(self, view: str, x: float = 0, y: float = 0, level: str = "parts",
+                       hide: str = "") -> str:
         """Parts list of the view's assembly. Without x, y it sits on the title block, flush
-        with the right border, as in the Arjuna drawings. (x, y) is its top right corner."""
+        with the right border, as in the Arjuna drawings. (x, y) is its top right corner.
+        hide: rows to leave out, by part number or file name, separated by ';' (an unused
+        variant kept in the assembly, say); the rest are renumbered."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
@@ -3061,6 +3171,23 @@ class InventorConnection:
         for i in range(1, cols.Count + 1):
             if cols.Item(i).Title.upper() in widths:
                 cols.Item(i).Width = widths[cols.Item(i).Title.upper()] / 10.0
+        hidden = []
+        for key in [k.strip().lower() for k in hide.split(";") if k.strip()]:
+            rows = pl.PartsListRows
+            match = None
+            for i in range(1, rows.Count + 1):
+                row = rows.Item(i)
+                files = [os.path.basename(row.ReferencedFiles.Item(j).FullFileName).lower()
+                         for j in range(1, row.ReferencedFiles.Count + 1)]
+                if str(row.Item(3).Value).lower() == key or key in files or key + ".ipt" in files:
+                    match = row
+                    break
+            if match is None:
+                raise ValueError(f"No parts list row with part number or file {key!r}")
+            match.Visible = False
+            hidden.append(key)
+        if hidden:
+            pl.Renumber()
         r = self._rect(pl)
         if not (x or y):
             area = self._drawing_area(sheet)
@@ -3072,16 +3199,16 @@ class InventorConnection:
                    if self._overlap(r, self._view_rect(o))]
         rows = pl.PartsListRows
         items = [f"{rows.Item(i).Item(1).Value}: {rows.Item(i).Item(3).Value} x{rows.Item(i).Item(2).Value}"
-                 for i in range(1, rows.Count + 1)]
+                 for i in range(1, rows.Count + 1) if rows.Item(i).Visible]
         warn = f"; overlaps view {', '.join(clashes)}" if clashes else ""
         return f"Parts list {self._fmt_rect(r)}, {len(items)} items: {'; '.join(items)}{warn}"
 
     def add_balloons(self, view: str, gap: float = 12) -> str:
         """One balloon per parts list item visible in the view, in a row above or below it.
 
-        Each balloon points at the longest edge that no other component shares, on the
-        instance with the most edges in the view; balloons keep the x order of those points
-        so leaders do not cross.
+        Each balloon points at the longest edge that no other component shares, near its end
+        on the balloon row's side, on the instance with the most edges in the view; balloons
+        keep the x order of those points so leaders do not cross.
         gap: distance in mm between the view box and the balloon row.
         """
         doc = self.active_drawing()
@@ -3131,11 +3258,26 @@ class InventorConnection:
             own = [g for g in geometry if g[0] == occ.Name and g[1] == "line"]
             others = [g for g in geometry if g[0] != occ.Name]
             choice, fallback = None, None
-            for _, _, a, b, c in sorted(own, key=lambda g: -((g[3][0] - g[2][0]) ** 2 + (g[3][1] - g[2][1]) ** 2)):
+            middle_y = v.Center.Y
+
+            def rank(g):
+                # Leaders run up or down to their row: a vertical edge would hide the leader
+                # in its own line, so edges across the leader come first, then by length.
+                dx, dy = abs(g[3][0] - g[2][0]), abs(g[3][1] - g[2][1])
+                return (dx < 0.3 * dy, -(dx * dx + dy * dy))
+
+            for _, _, a, b, c in sorted(own, key=rank):
                 mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+                # Towards the end farther from the view's middle: the balloon row sits on
+                # that side, so the leader stays short instead of crossing the view.
+                end = a if abs(a[1] - middle_y) >= abs(b[1] - middle_y) else b
+                outer = (mid[0] + 0.7 * (end[0] - mid[0]), mid[1] + 0.7 * (end[1] - mid[1]))
                 fallback = fallback or (c, mid)
-                if all(distance(mid[0], mid[1], k, oa, ob) > 0.03 for _, k, oa, ob, _ in others):
-                    choice = (c, mid)
+                for point in (outer, mid):
+                    if all(distance(point[0], point[1], k, oa, ob) > 0.03 for _, k, oa, ob, _ in others):
+                        choice = (c, point)
+                        break
+                if choice:
                     break
             curve, foot = choice or fallback or (curves[0], (curves[0].StartPoint.X, curves[0].StartPoint.Y))
             targets.append((occ, curve, foot[0] * 10, foot[1] * 10))

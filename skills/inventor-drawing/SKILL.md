@@ -89,16 +89,25 @@ each circle, in chain line.
 5. Section and detail labels ("A-A ( 1 : 1 )") sit **above** their view. Keep dimensions
    on the other sides of a section, or leave a clear band above the label; the checker
    catches text on text, not a label sitting between extension lines.
-6. Distance between hole centres: use `horizontal` / `vertical` with points **on the two
+6. Decimals follow the model: a length of 121,42 prints with two decimals even though the
+   profile shows one; more than two is rounded (more would tighten the general
+   tolerance). Check that the design value and `ModelValue` agree.
+7. Distance between hole centres: use `horizontal` / `vertical` with points **on the two
    circles** (e.g. their tops, (-30, 5.5) and (30, 5.5)); it measures centre to centre.
    Points exactly at the centres hit no curve and fail with a COM error.
-7. Holes: `add_hole_note(view, x, y, tx, ty, second_line="EQ SP ON PCD Ø90")` gives
+8. Holes: `add_hole_note(view, x, y, tx, ty, second_line="EQ SP ON PCD Ø90")` gives
    "4x Ø11 THRU" with the bolt circle under it; prefer that to a separate PCD dimension.
    The count only appears by itself when the holes are **one patterned feature**: a
    `hole()` plus `circular_pattern` (two holes at x = ±30 are a pattern of 2 over 360°
    about Z). For holes made as separate features pass `count=2`. A wrong note:
    `list_notes()`, `delete_note("i")`, place it again.
-8. Chamfers: `add_chamfer_note` on a view where the chamfer is a slanted line,
+   Equal holes on a circle get a pitch circle from `add_centerlines` even when they were
+   cut in one sketch; then `add_dimension(view, "pcd", ..., prefix="PCD ")`. A diameter
+   leader lands where the line from its text to the centre meets the circle, so put the
+   text on an angle between two holes.
+9. External threads: `add_hole_note` with the point on the thread line in a side view
+   gives the thread note ("M42x1.5 - 6g").
+10. Chamfers: `add_chamfer_note` on a view where the chamfer is a slanted line,
    `prefix="2x "` for equal chamfers.
 
 ### Tolerances and GD&T
@@ -186,6 +195,13 @@ set_title_block(...); list_views(); export_sheet_png(...); save_document(...); e
   and below it, leaders not crossing, each on an edge no other component shares. Check
   the PNG.
 - The copy does not follow later changes to the original; make it again.
+
+### Variant and reference parts
+
+An assembly may hold parts that are not delivered (an alternative shaft, a reference
+body). Hide them in each view with `set_component_visibility(view, "Name:1", False)` and
+leave them out of the parts list with `add_parts_list(view, hide="part number or file")`;
+the other items are renumbered. Nothing in the assembly changes.
 
 ### Assembled section (when asked)
 

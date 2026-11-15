@@ -835,6 +835,38 @@ def assembly():
         return f"{parts} | {balloons}"
     check("assembly drawing: design view, no_hatch, parts list, balloons", assembly_drawing)
 
+    def hidden_variant():
+        srv.create_drawing()
+        srv.add_base_view(str(OUT / "audit_assembly.iam"), 150, 200, 0.5)
+        out = srv.set_component_visibility("VIEW1", "DIN 933 - replaced by DIN EN 24017 M10  x 60:1", False)
+        pl = srv.add_parts_list("VIEW1", hide="DIN 933 - M10  x 60")
+        assert "3 items" in pl and "DIN 933" not in pl, pl
+        srv.inv.active_document().Close(True)
+        return f"{out} | {pl}"
+    check("set_component_visibility + parts list hide", hidden_variant)
+
+    def disc_details():
+        # Four equal holes cut in one sketch: no pattern, yet a pitch circle and PCD; a
+        # 12.35 mm wide plate keeps its second decimal.
+        srv.create_part("audit_disc")
+        srv.create_sketch("XY")
+        srv.draw_circle(0, 0, 100)
+        for x, y in ((35, 0), (0, 35), (-35, 0), (0, -35)):
+            srv.draw_circle(x, y, 8, sketch_index=0)
+        srv.extrude(12.35)
+        srv.save_document(str(OUT / "audit_disc.ipt"))
+        srv.create_drawing()
+        srv.add_base_view(str(OUT / "audit_disc.ipt"), 120, 180, 1)
+        srv.add_projected_view("VIEW1", 230, 180)
+        cl = srv.add_centerlines("VIEW1")
+        assert "1 bolt circle(s) added" in cl, cl
+        pcd = srv.add_dimension("VIEW1", "pcd", 24.75, 24.75, text_x=-60, text_y=60, prefix="PCD ")
+        thick = srv.add_dimension("VIEW2", "horizontal", -6.175, 30, 6.175, 30, text_x=0, text_y=60)
+        assert "12,35" in thick, thick
+        srv.inv.active_document().Close(True)
+        return f"{pcd} | {thick}"
+    check("bolt circle for sketch holes + automatic dimension precision", disc_details)
+
     def exploded():
         copy = OUT / "audit_exploded.iam"
         out = srv.create_exploded_copy(str(OUT / "audit_assembly.iam"), str(copy))
