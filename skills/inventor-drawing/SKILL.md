@@ -148,9 +148,11 @@ the file name until set). Fill them before drawing:
 
 ## Assembly drawings: exploded view by default
 
-An assembly drawing is an **exploded isometric view with a parts list and balloons**,
-as in the Arjuna assembly drawings. Draw the assembled state (with a section) only when
-the user asks for it, e.g. to show fits.
+An assembly drawing of a **bolted or loose assembly** is an **exploded isometric view
+with a parts list and balloons**, as in the Arjuna assembly drawings. A **welded assembly
+(weldment)** is drawn **assembled** instead, with welding symbols: see the
+`inventor-weld` skill. Draw a non-welded assembly in its assembled state (with a section)
+only when the user asks for it, e.g. to show fits.
 
 Inventor 2027's presentation API cannot add tweaks or snapshot views, so the exploded
 view comes from a free copy of the assembly:

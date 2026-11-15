@@ -619,7 +619,7 @@ def create_drawing(profile: str = "default", template: str = "", sheet_size: str
 def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
                   orientation: str = "front", style: str = "visible",
                   design_view: str = "", positional: str = "",
-                  spin: float = 0, spin_axis: str = "Z") -> str:
+                  spin: float = 0, spin_axis: str = "Z", weldment_state: str = "") -> str:
     """Place the first view of a part or assembly file, centered at (x, y) on the sheet.
     A view that would leave the border or overlap the title block or another view is
     removed again and an error says why.
@@ -636,9 +636,11 @@ def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
         spin: degrees to turn the view camera about the model axis spin_axis (X, Y or Z).
               An iso view of a flange with holes at 0/90/180/270 degrees shows pairs of
               bolts on one line; spin 30 about the flange axis separates them.
+        weldment_state: for a weldment: assembly, preparations, welds (default for a
+              weldment, shows the welds) or machining.
     """
     return inv.add_base_view(model_path, x, y, scale, orientation, style, design_view, positional,
-                             spin, spin_axis)
+                             spin, spin_axis, weldment_state)
 
 
 @mcp.tool()
@@ -1158,6 +1160,56 @@ def auto_explode(spacing: float = 20, axis: str = "Z") -> str:
         axis: X, Y or Z of the assembly.
     """
     return inv.auto_explode(spacing, axis)
+
+
+@mcp.tool()
+def create_weldment(template: str = "") -> str:
+    """Create a weldment assembly (Inventor's ISO weldment template by default). Place and
+    constrain the parts with place_component / add_constraint as in any assembly, then add
+    welds with add_cosmetic_weld. Inventor 2027's API cannot create weld beads (solid fillet
+    or groove welds); cosmetic welds plus welding symbols on the drawing are the route."""
+    return inv.create_weldment(template)
+
+
+@mcp.tool()
+def add_cosmetic_weld(occurrence: str, edges: str, leg: float = 0) -> str:
+    """Cosmetic weld along edges of one component of the active weldment.
+
+    Args:
+        occurrence: component whose edges the weld runs along, e.g. "Upright_Plate:1".
+        edges: edge selectors in that component's part coordinates, separated by ';'
+               (selectors contain commas), e.g. "edge:0,-30,0; edge:0,-30,10".
+        leg: fillet leg in mm; the weld's cross-section (leg^2 / 2) then counts in mass.
+    """
+    return inv.add_cosmetic_weld(occurrence, edges, leg)
+
+
+@mcp.tool()
+def add_weld_symbol(view: str, x: float, y: float, text_x: float, text_y: float,
+                    kind: str = "fillet", size: str = "", length: str = "", sides: str = "arrow",
+                    all_around: bool = False, field: bool = False, tail: str = "",
+                    attach: bool = True) -> str:
+    """ISO 2553 welding symbol whose arrow points at the joint nearest (x, y) in a view.
+
+    Args:
+        view: view name. Points are model mm from the view center.
+        x, y: point on the joint line the arrow points at.
+        text_x, text_y: where the reference line starts.
+        kind: fillet, square (I butt), v, bevel, u, j, flare_v, flare_bevel, plug, slot,
+              spot, seam, back, surfacing, scarf, stud.
+        size: "a4" (fillet throat) or "z5" (leg) for fillets, "s8" for butt welds, "d5"
+              for spot welds.
+        length: weld length, "50", or "3x50(100)" for an intermittent weld.
+        sides: arrow (weld on the side the arrow points at; dashed identification line
+               under the reference line), other (far side; symbol on the dashed line),
+               both (symmetrical, e.g. fillets on both sides of a plate).
+        all_around: circle at the joint for a weld all around.
+        field: flag for a weld made on site.
+        tail: process number or note in the tail, e.g. "135" (MAG).
+        attach: False ends the arrow exactly at (x, y).
+    """
+    return inv.add_weld_symbol(view, x, y, text_x, text_y, kind, size, length, sides,
+                               all_around, field, tail, attach)
 
 
 def main():

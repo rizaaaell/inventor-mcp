@@ -5,7 +5,8 @@ Run from the repo root:  python -X utf8 -u tools/prepare_arjuna_templates.py
 For every .idw in references/templates/ it writes references/templates/2027/<name>:
 a copy opened and saved once in this Inventor (older templates make Documents.Add
 fail), with a DOCUMENT TYPE prompt added under the "DOCUMENT TYPE:" label when the
-title block has the label but no field and centred under it, and MATERIAL as a prompt.
+title block has the label but no field, every value centred in its cell, and MATERIAL as
+a prompt.
 The originals are not touched.
 
 The Arjuna style exports (*.styxml) still have to be imported by hand afterwards,
@@ -87,25 +88,51 @@ def _cell(sketch, x: float, y: float):
             max(v for v in ys if v < y), min(v for v in ys if v > y))
 
 
-def center_document_type(doc) -> str:
-    """Centre the DOCUMENT TYPE value in the space under its label, like REV and MATERIAL."""
+def _font_cm(box, default: float = 0.25) -> float:
+    m = re.search(r"FontSize='(\d+[.,]?\d*)'", box.FormattedText)
+    return float(m.group(1).replace(",", ".")) if m else default
+
+
+def _is_value(box) -> bool:
+    """A field, or a short fixed value such as "mm"; labels end with a colon."""
+    if re.search(r"<(Prompt|Property|DerivedProperty)", box.FormattedText):
+        return True
+    text = box.Text.strip()
+    return bool(text) and ":" not in text and " " not in text
+
+
+def center_fields(doc) -> str:
+    """Centre every value of the title block in its cell, horizontally and vertically.
+
+    A cell with a label ("REV:", "MATERIAL:") keeps the label at the top left; the value is
+    centred in the space under it. The label's box can be taller than its text, so the text
+    height comes from its font size and line count.
+    """
     definition = doc.ActiveSheet.TitleBlock.Definition
     sketch = definition.Edit()
+    moved = []
     try:
         boxes = [sketch.TextBoxes.Item(i) for i in range(1, sketch.TextBoxes.Count + 1)]
-        value = next((t for t in boxes if "<Prompt" in t.FormattedText and "DOCUMENT TYPE" in t.Text.upper()), None)
-        label = next((t for t in boxes if t.Text.strip().upper() == "DOCUMENT TYPE:"), None)
-        if value is None or label is None:
-            return "no DOCUMENT TYPE field to centre"
-        left, right, bottom, _ = _cell(sketch, label.Origin.X + 0.5, label.Origin.Y - 0.3)
-        label_bottom = label.Origin.Y - label.Height  # the label is top-left aligned
+        labels = [b for b in boxes if not _is_value(b)]
         tg = doc.Parent.TransientGeometry
-        value.HorizontalJustification = 19969  # kAlignTextCenter
-        value.VerticalJustification = 25601  # kAlignTextMiddle
-        value.Origin = tg.CreatePoint2d((left + right) / 2, (bottom + label_bottom) / 2)
+        for value in (b for b in boxes if _is_value(b)):
+            try:
+                left, right, bottom, top = _cell(sketch, value.Origin.X, value.Origin.Y)
+            except ValueError:
+                continue  # not inside a closed cell
+            inside = [lb for lb in labels if left <= lb.Origin.X < right and bottom < lb.Origin.Y <= top + 0.05]
+            ceiling = top
+            if inside:
+                label = max(inside, key=lambda lb: lb.Origin.Y)
+                lines = label.Text.count("\n") + 1
+                ceiling = min(top, label.Origin.Y - lines * _font_cm(label) * 1.6)
+            value.HorizontalJustification = 19969  # kAlignTextCenter
+            value.VerticalJustification = 25601  # kAlignTextMiddle
+            value.Origin = tg.CreatePoint2d((left + right) / 2, (bottom + ceiling) / 2)
+            moved.append(value.Text.strip().strip("<>")[:16])
     finally:
         definition.ExitEdit(True)
-    return "DOCUMENT TYPE centred"
+    return f"centred {len(moved)} values"
 
 
 def material_prompt(doc) -> str:
@@ -201,7 +228,7 @@ def main():
             doc = app.Documents.Open(str(dst), False)
             note = ("migrated, " if fresh else "kept, ") + add_document_type_field(doc)
             note += ", " + shrink_long_fields(doc)
-            note += ", " + center_document_type(doc)
+            note += ", " + center_fields(doc)
             note += ", " + material_prompt(doc)
             note += ", " + arjuna_standard(doc)
             doc.Save()

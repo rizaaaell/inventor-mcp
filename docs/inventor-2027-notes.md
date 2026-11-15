@@ -385,6 +385,31 @@ Verified while building the phase 3 tools (2027.1):
   seat face a component sits on. The middle of the parent part is not enough: a washer on
   the back of a flange disk sits below the middle of the flange when the hub is long.
 
+## Weldments
+
+- `Documents.Add(12291, "Metric/Weldment (ISO).iam")` gives a weldment: an assembly whose
+  `ComponentDefinition` is a `WeldmentComponentDefinition` with `Welds`, `Preparations`,
+  `Machining`. Its occurrences include the welds as an unnamed occurrence whose
+  `ReferencedDocumentDescriptor` is `None`; skip it when reading component files.
+- Weld beads cannot be created: `WeldBeads` has only Count/Item. `Welds.Edit()`, then
+  `Welds.CosmeticWelds.CreateDefinition(EdgeCollection)` and `Add(definition)`, then
+  `Welds.ExitEdit()` make a cosmetic weld. `CosmeticWeldDefinition.Area` is an expression
+  string ("0.00 in^2"), set as `"18 mm^2"`, not a Parameter.
+- Drawing views of a weldment open in the assembly state; `view.SetWeldmentState(80899)`
+  (`kWeldsWeldmentState`; 80897 assembly, 80898 machining, 80900 preparations) shows the
+  welds. Their curves raise `E_NOTIMPL` on `Segments`; skip them when scanning curves.
+- Welding symbols: `defs = sheet.WeldingSymbols.CreateDefinitions()` starts empty;
+  `d = defs.Add(1)`, set `d.WeldSymbolOne` (and `WeldSymbolTwo` for both sides):
+  `WeldSymbolType` (fillet 124162, square 124176, V 124178, bevel 124179, U 124181,
+  J 124182, plug 124163, spot 124166, seam 124169), then the size. The size field depends
+  on the type: fillets take `SizeOrStrength` ("a4"), butt welds `PenetrationDepth` ("s8"),
+  spot welds `Diameter`; the other fields raise `E_FAIL`. `Length` takes "50" or
+  "3x50(100)". `IdentificationLinePlacement` 122881 none, 122882 above, 122883 below
+  puts the ISO dashed line; `AllAroundSymbol`, `FieldWeldingSymbol`, `TailNote`.
+  `sheet.WeldingSymbols.Add(leaderPoints, defs)` places it (leader points as for notes).
+- Two constraints with the same name raise `E_INVALIDARG` on `Name`; the second flush
+  between one pair of components needs its own name.
+
 ## Closing documents
 
 - `Document.Close` on a part an open assembly or drawing still uses shows an

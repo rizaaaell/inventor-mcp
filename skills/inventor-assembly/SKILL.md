@@ -5,10 +5,12 @@ description: Build Inventor assemblies (.iam) through the inventor-mcp server - 
 
 # Inventor assemblies through MCP
 
-What the team usually needs from an assembly is its **exploded drawing** (exploded iso
-view, parts list, balloons; see the `inventor-drawing` skill). Build the assembly with
-constraints anyway: `auto_explode` reads the constraint log to explode it, and DOF, BOM and
-interference checks catch modelling mistakes before they reach the drawing.
+What the team usually needs from an assembly is its drawing. A bolted or loose
+assembly gets an **exploded drawing** (exploded iso view, parts list, balloons; see the
+`inventor-drawing` skill); a **welded** one is built as a weldment and drawn assembled with
+welding symbols (see the `inventor-weld` skill). Build the assembly with constraints either
+way: `auto_explode` reads the constraint log to explode it, and DOF, BOM and interference
+checks catch modelling mistakes before they reach the drawing.
 
 ## Workflow
 

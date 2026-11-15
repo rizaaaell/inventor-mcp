@@ -868,6 +868,63 @@ def assembly():
     close_audit_files()
 
 
+def weldment():
+    """Weldment with two plates, a cosmetic weld, and a drawing with welding symbols."""
+    close_audit_files()
+    base, upright = OUT / "audit_weld_base.ipt", OUT / "audit_weld_upright.ipt"
+    for path, w in ((base, 100), (upright, 60)):
+        srv.create_part(path.stem)
+        srv.create_sketch("XY")
+        srv.draw_rectangle(0, 0, w, 60)
+        srv.extrude(10)
+        srv.save_document(str(path))
+        srv.inv.active_document().Close(True)
+
+    check("create_weldment", srv.create_weldment)
+
+    def build():
+        srv.place_component(str(base), grounded=True)
+        srv.place_component(str(upright), 0, 0, 60, rx=90)
+        srv.add_constraint("mate", "audit_weld_base:1", "face:0,0,10", "audit_weld_upright:1", "face:0,-30,5")
+        a = srv.add_constraint("flush", "audit_weld_base:1", "plane:YZ", "audit_weld_upright:1", "plane:XY")
+        b = srv.add_constraint("flush", "audit_weld_base:1", "plane:XZ", "audit_weld_upright:1", "plane:YZ")
+        assert "_2 (healthy)" in b, f"second flush on the same pair needs its own name: {a} / {b}"
+        names = [o["name"] for o in json.loads(srv.list_occurrences())]
+        assert names == ["audit_weld_base:1", "audit_weld_upright:1"], names
+        assert json.loads(srv.get_dof())["fully_constrained"], srv.get_dof()
+        return b
+    check("weldment constraints, unique names, welds component left out", build)
+
+    def weld():
+        out = srv.add_cosmetic_weld("audit_weld_upright:1", "edge:0,-30,0; edge:0,-30,10", leg=6)
+        welds = srv.inv.active_assembly().ComponentDefinition.Welds.CosmeticWelds
+        assert welds.Count == 1, welds.Count
+        assert json.loads(srv.analyze_interference()) == [], srv.analyze_interference()
+        srv.save_document(str(OUT / "audit_weldment.iam"))
+        return out
+    check("add_cosmetic_weld", weld)
+
+    def drawing():
+        srv.create_drawing()
+        srv.add_base_view(str(OUT / "audit_weldment.iam"), 120, 180, 1)
+        state = srv.inv._view("VIEW1").GetWeldmentState()[0]
+        assert state == 80899, f"weldment view in state {state}, expected welds (80899)"
+        out = [srv.add_weld_symbol("VIEW1", 0, -24, -45, 25, "fillet", "a4", sides="both", tail="135"),
+               srv.add_weld_symbol("VIEW1", 50, -30, 70, -50, "v", "s8", "50", sides="arrow", field=True)]
+        assert srv.inv.active_drawing().ActiveSheet.WeldingSymbols.Count == 2
+        srv.add_parts_list("VIEW1")
+        balloons = srv.add_balloons("VIEW1")
+        assert balloons.startswith("2 balloons"), balloons
+        shown = json.loads(srv.set_title_block('{"TITLE": "Audit weldment"}'))["title_block"]["MATERIAL"]
+        assert shown == "NONE", shown
+        problems = json.loads(srv.list_views())["problems"]
+        assert not problems, problems
+        srv.inv.active_document().Close(True)
+        return " | ".join(out + [balloons])
+    check("weldment drawing: welds state, add_weld_symbol, balloons", drawing)
+    close_audit_files()
+
+
 def drawing_edits():
     """Moving and deleting views, hole note count, notes, iProperties, MATERIAL statement."""
     close_audit_files()
@@ -961,7 +1018,8 @@ def _equal(actual, expected):
 
 
 def main():
-    for group in (solid_block, revolves, extrude_variants, sheet_metal, drawing, assembly, drawing_edits,
+    for group in (solid_block, revolves, extrude_variants, sheet_metal, drawing, assembly, weldment,
+                  drawing_edits,
                   server_only):
         print(f"\n{group.__name__}: {group.__doc__}", flush=True)
         try:

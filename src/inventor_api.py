@@ -1596,7 +1596,7 @@ class InventorConnection:
     def add_base_view(self, model_path: str, x: float, y: float, scale: float = 1.0,
                       orientation: str = "front", style: str = "visible",
                       design_view: str = "", positional: str = "",
-                      spin: float = 0, spin_axis: str = "Z") -> str:
+                      spin: float = 0, spin_axis: str = "Z", weldment_state: str = "") -> str:
         """spin turns the camera of the orientation by that many degrees about the model's
         spin_axis, e.g. so the bolts of a flange stop hiding each other in an iso view."""
         sheet = self.active_drawing().ActiveSheet
@@ -1625,6 +1625,12 @@ class InventorConnection:
             "", camera, options)
         if name:
             view.Name = name  # the throwaway view took the next name
+        if self._is_weldment(model) or weldment_state:
+            # A weldment view opens in the assembly state, without its welds.
+            state = self._WELD_STATES.get((weldment_state or "welds").lower())
+            if state is None:
+                raise ValueError(f"weldment_state must be one of {', '.join(self._WELD_STATES)}")
+            view.SetWeldmentState(state)
         rect = self._place_check(sheet, view)
         note = ""
         if first:
@@ -2077,9 +2083,16 @@ class InventorConnection:
         curves = view.DrawingCurves  # property get; calling it fails under late binding
         for i in range(1, curves.Count + 1):
             curve = curves.Item(i)
-            segments = curve.Segments
-            for j in range(1, segments.Count + 1):
-                g = segments.Item(j).Geometry
+            try:
+                segments = curve.Segments
+                count = segments.Count
+            except Exception:
+                continue  # weld bead curves in a weldment view raise E_NOTIMPL here
+            for j in range(1, count + 1):
+                try:
+                    g = segments.Item(j).Geometry
+                except Exception:
+                    continue
                 try:
                     center, radius = g.Center, g.Radius
                     dx, dy = p.X - center.X, p.Y - center.Y
@@ -2088,7 +2101,10 @@ class InventorConnection:
                     foot = (center.X + radius * dx / n, center.Y + radius * dy / n)
                     is_circle = True
                 except Exception:
-                    a, b = g.StartPoint, g.EndPoint
+                    try:
+                        a, b = g.StartPoint, g.EndPoint
+                    except Exception:
+                        continue  # ellipses and splines
                     vx, vy = b.X - a.X, b.Y - a.Y
                     t = max(0.0, min(1.0, ((p.X - a.X) * vx + (p.Y - a.Y) * vy) / ((vx * vx + vy * vy) or 1e-12)))
                     foot = (a.X + t * vx, a.Y + t * vy)
@@ -2653,6 +2669,14 @@ class InventorConnection:
         # Content Center names carry double spaces ("DIN 933 - M10  x 60:1").
         return " ".join(a.lower().split()) == " ".join(b.lower().split())
 
+    @staticmethod
+    def _components(definition) -> list:
+        """Occurrences backed by a file. A weldment also holds its welds as an unnamed
+        occurrence without a document, which the tools leave out."""
+        occs = definition.Occurrences
+        return [occs.Item(i) for i in range(1, occs.Count + 1)
+                if occs.Item(i).ReferencedDocumentDescriptor is not None]
+
     def _occurrence(self, name: str):
         occs = self.active_assembly().ComponentDefinition.Occurrences
         names = []
@@ -2873,7 +2897,12 @@ class InventorConnection:
             c = constraints.AddTangentConstraint(e1, e2, False, offset / 10.0)
         else:
             raise ValueError("kind must be mate, flush, insert, angle or tangent")
-        c.Name = name or f"{kind.capitalize()}_{occurrence1}_{occurrence2}".replace(":", "_")
+        base = name or f"{kind.capitalize()}_{occurrence1}_{occurrence2}".replace(":", "_")
+        taken = {constraints.Item(i).Name for i in range(1, constraints.Count + 1)} - {c.Name}
+        unique, n = base, 2
+        while unique in taken:  # Inventor refuses a duplicate name, e.g. two flushes on one pair
+            unique, n = f"{base}_{n}", n + 1
+        c.Name = unique
         doc.Update()
         logs = getattr(self, "_constraint_logs", {})
         log = logs.setdefault(doc.InternalName, [])
@@ -2900,10 +2929,8 @@ class InventorConnection:
         return f" (constraint order: {os.path.basename(path)})"
 
     def list_occurrences(self) -> list[dict]:
-        occs = self.active_assembly().ComponentDefinition.Occurrences
         out = []
-        for i in range(1, occs.Count + 1):
-            o = occs.Item(i)
+        for o in self._components(self.active_assembly().ComponentDefinition):
             t = o.Transformation
             dof = o.GetDegreesOfFreedom()
             out.append({"name": o.Name,
@@ -2952,8 +2979,8 @@ class InventorConnection:
         so a tapped part against a threaded one is a thread artifact, not a real clash."""
         ad = self.active_assembly().ComponentDefinition
         col = self.app.TransientObjects.CreateObjectCollection()
-        for i in range(1, ad.Occurrences.Count + 1):
-            col.Add(ad.Occurrences.Item(i))
+        for o in self._components(ad):
+            col.Add(o)
         results = ad.AnalyzeInterference(col)
 
         def tapped(occ):
@@ -3063,18 +3090,19 @@ class InventorConnection:
         model = v.ReferencedDocumentDescriptor.ReferencedDocument
         if model.DocumentType != 12291:
             raise ValueError(f"View {view} shows a part; balloons need an assembly view")
-        occs = model.ComponentDefinition.Occurrences
         best = {}  # file -> (curve count, occurrence, curves)
         geometry = []  # (occurrence name, line ends or (center, radius)) of every visible edge
-        for i in range(1, occs.Count + 1):
-            o = occs.Item(i)
+        for o in self._components(model.ComponentDefinition):
             try:
                 curves = self._view_curves(v, o)
             except Exception:
                 continue
             for c in curves:
-                for j in range(1, c.Segments.Count + 1):
-                    g = c.Segments.Item(j).Geometry
+                try:
+                    segments = [c.Segments.Item(j).Geometry for j in range(1, c.Segments.Count + 1)]
+                except Exception:
+                    continue  # weld curves in a weldment view raise E_NOTIMPL
+                for g in segments:
                     try:
                         geometry.append((o.Name, "arc", (g.Center.X, g.Center.Y), g.Radius, c))
                         continue
@@ -3334,10 +3362,8 @@ class InventorConnection:
         with open(constraint_log, encoding="utf-8") as f:
             steps = json.load(f)["constraints"]
 
-        occs = doc.ComponentDefinition.Occurrences
         span, files = {}, {}
-        for i in range(1, occs.Count + 1):
-            o = occs.Item(i)
+        for o in self._components(doc.ComponentDefinition):
             r = o.RangeBox
             span[o.Name] = ((r.MinPoint.X, r.MinPoint.Y, r.MinPoint.Z)[k] * 10,
                             (r.MaxPoint.X, r.MaxPoint.Y, r.MaxPoint.Z)[k] * 10)
@@ -3515,3 +3541,105 @@ class InventorConnection:
             written.append(name)
         doc.Save()
         return f"{os.path.basename(path)}: {', '.join(written)} written and saved"
+
+    # ---------- Weldments ----------
+    # Inventor 2027's API cannot create weld beads (fillet or groove welds as solids):
+    # WeldBeads has no Add. It can create cosmetic welds on edges and welding symbols on
+    # drawings, which is what a weld drawing needs.
+
+    WELDMENT_TEMPLATE = "builtin:Metric/Weldment (ISO).iam"
+    _WELD_STATES = {"assembly": 80897, "machining": 80898, "welds": 80899, "preparations": 80900}
+    _WELD_KINDS = {
+        "fillet": 124162, "plug": 124163, "slot": 124164, "stud": 124165, "spot": 124166,
+        "seam": 124169, "back": 124172, "surfacing": 124173, "square": 124176, "i_butt": 124176,
+        "scarf": 124177, "v": 124178, "v_butt": 124178, "bevel": 124179, "u": 124181,
+        "j": 124182, "flare_v": 124184, "flare_bevel": 124185,
+    }
+
+    @staticmethod
+    def _is_weldment(doc) -> bool:
+        try:
+            return doc.DocumentType == 12291 and doc.ComponentDefinition.Welds is not None
+        except Exception:
+            return False
+
+    def create_weldment(self, template: str = "") -> str:
+        """New weldment assembly; place and constrain parts with the assembly tools."""
+        out = self.create_assembly(template or self.WELDMENT_TEMPLATE)
+        if not self._is_weldment(self.active_document()):
+            raise RuntimeError(f"{template} did not make a weldment; use a 'Weldment' template")
+        return out.replace("Assembly created", "Weldment created")
+
+    def add_cosmetic_weld(self, occurrence: str, edges: str, leg: float = 0) -> str:
+        """Cosmetic weld along edges of one component, e.g. the two edges where an upright
+        plate meets a base plate. edges: edge selectors separated by ';'. leg: fillet leg in
+        mm; its area (leg^2 / 2) counts in the weldment's mass."""
+        doc = self.active_assembly()
+        if not self._is_weldment(doc):
+            raise ValueError("The active assembly is not a weldment; start with create_weldment")
+        welds = doc.ComponentDefinition.Welds
+        collection = self.app.TransientObjects.CreateEdgeCollection()
+        selectors = [s.strip() for s in edges.split(";") if s.strip()]
+        if not selectors:
+            raise ValueError("edges: one or more edge selectors separated by ';'")
+        for sel in selectors:
+            collection.Add(self._geometry(occurrence, sel))
+        welds.Edit()
+        try:
+            definition = welds.CosmeticWelds.CreateDefinition(collection)
+            if leg:
+                definition.Area = f"{leg * leg / 2:g} mm^2"  # an expression string, not a Parameter
+            weld = welds.CosmeticWelds.Add(definition)
+        finally:
+            welds.ExitEdit()
+        doc.Update()
+        return f"{weld.Name} on {len(selectors)} edge(s) of {occurrence}" + (f", leg {leg:g} mm" if leg else "")
+
+    def add_weld_symbol(self, view: str, x: float, y: float, text_x: float, text_y: float,
+                        kind: str = "fillet", size: str = "", length: str = "", sides: str = "arrow",
+                        all_around: bool = False, field: bool = False, tail: str = "",
+                        attach: bool = True) -> str:
+        """ISO welding symbol with its arrow on the curve nearest (x, y) of a view.
+
+        sides: "arrow" (weld on the arrow side: symbol on the full reference line, dashed
+        identification line under it), "other" (symbol on the dashed line), "both"
+        (symmetrical: symbol on both sides, no dashed line). size e.g. "a4" (throat) or "z5"
+        (leg) for fillets, "s8" for butt welds; length e.g. "50" or "3x50(100)" for
+        intermittent welds. tail: process or note, e.g. "135". Points are model mm from the
+        view center."""
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        code = self._WELD_KINDS.get(kind.lower())
+        if code is None:
+            raise ValueError(f"Unknown weld kind {kind}. Use {', '.join(self._WELD_KINDS)}.")
+        sides = sides.lower()
+        if sides not in ("arrow", "other", "both"):
+            raise ValueError('sides must be "arrow", "other" or "both"')
+        definitions = sheet.WeldingSymbols.CreateDefinitions()
+        definition = definitions.Add(1)
+        symbols = [definition.WeldSymbolOne] + ([definition.WeldSymbolTwo] if sides == "both" else [])
+        for symbol in symbols:
+            symbol.WeldSymbolType = code
+            if size:
+                # The size sits in a different field per kind: fillets take SizeOrStrength,
+                # butt welds PenetrationDepth, spot welds Diameter.
+                for field_name in ("SizeOrStrength", "PenetrationDepth", "Diameter", "Width"):
+                    try:
+                        setattr(symbol, field_name, size)
+                        break
+                    except Exception:
+                        continue
+                else:
+                    raise ValueError(f"A {kind} weld symbol takes no size")
+            if length:
+                symbol.Length = length
+        # ISO 2553 system A: the full line is the arrow side, the dashed one the other side.
+        definition.IdentificationLinePlacement = {"arrow": 122883, "other": 122882, "both": 122881}[sides]
+        definition.AllAroundSymbol = bool(all_around)
+        definition.FieldWeldingSymbol = bool(field)
+        if tail:
+            definition.TailNote = tail
+        points, miss = self._leader_points(v, x, y, text_x, text_y, attach)
+        sheet.WeldingSymbols.Add(points, definitions)
+        return (f"{kind} weld symbol {size} {length}".rstrip() + f", {sides} side(s), in {v.Name} "
+                f"{self._where(miss)}")

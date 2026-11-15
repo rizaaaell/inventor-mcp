@@ -64,7 +64,7 @@ Do not use `win32com.client.gencache.EnsureDispatch` against the same Python ins
 `gen_py` cache breaks `GetActiveObject`. Read `RxInventor.tlb` with
 `pythoncom.LoadTypeLib` instead (see the modeling skill).
 
-## Tools (79)
+## Tools (82)
 
 All lengths in mm, angles in degrees.
 
@@ -94,6 +94,10 @@ picked by selectors such as `circle:45,0,20,5.5` in part coordinates), `get_dof`
 `pattern_component`, `list_content_center`, `place_content_center`. Saving an assembly
 also writes its constraint order to `<name>.constraints.json`.
 
+**Weldments**: `create_weldment`, `add_cosmetic_weld`, `add_weld_symbol` (ISO 2553 fillet,
+butt, plug, spot ... symbols on drawings). The 2027 API cannot create weld beads; welds are
+specified by cosmetic welds in the model and welding symbols on the drawing.
+
 **Exploded views**: `create_exploded_copy`, `auto_explode` (from the constraint log),
 `explode_components`, `add_explode_trails`.
 Inventor 2027's presentation API cannot add tweaks, so exploded drawings come from a
@@ -119,7 +123,7 @@ works on any machine: `create_drawing(profile="iso")`.
 
 ## Skills
 
-`skills/` holds four [Agent Skills](https://code.claude.com/docs/en/skills) that teach the
+`skills/` holds five [Agent Skills](https://code.claude.com/docs/en/skills) that teach the
 workflow and the API traps:
 
 - **inventor-modeling**: parts, sketches, holes, sheet metal, Inventor 2027 differences.
@@ -127,6 +131,7 @@ workflow and the API traps:
   exploded copies.
 - **inventor-drawing**: view choice, dimension strategy, annotations, layout checks,
   parts lists, balloons, exploded drawings, PDF.
+- **inventor-weld**: weldments, cosmetic welds, welding symbols, assembled weld drawings.
 - **inventor-din-parts**: parametric DIN/ISO nuts, bolts, washers and flanges built as parts.
 
 Install by copying them into your skills directory:
@@ -140,11 +145,11 @@ With Inventor running:
 
 ```
 python -X utf8 -u tests/smoke.py        # 8 regression cases, volumes and drawing layout
-python -X utf8 -u tests/audit_tools.py  # every tool, 111 checks
+python -X utf8 -u tests/audit_tools.py  # every tool, 115 checks
 ```
 
 Test output goes to `C:\inventor-test\`. `experiments/` holds the full scripts behind the
-acceptance results (flange drawing, coupling assembly, assembly and exploded drawings).
+acceptance results (flange drawing, coupling assembly, assembly and exploded drawings, welded bracket).
 
 ## Layout
 
