@@ -1,9 +1,9 @@
 ---
 name: inventor-modeling
-description: Build parametric 3D parts in Autodesk Inventor 2026 via the project's MCP server. Use this skill whenever the user wants to create, modify, or inspect Inventor parts (.ipt) — building flanges, shafts, nuts, brackets, machine parts; drilling holes; adding fillets, chamfers, revolves, extrudes; saving or exporting parts; or troubleshooting "why didn't my hole cut" / "edge index changed" / "chamfer failed" issues. Triggers on Ukrainian phrases like "побудуй деталь", "зроби фланець", "створи гайку", "додай отвір", "фаска", "галтель", as well as English equivalents. Use whenever the user mentions DIN/ISO standard parts, mechanical engineering CAD work, or the `mcp__inventor__*` tools.
+description: Build parametric 3D parts in Autodesk Inventor 2027 (also 2026) via the project's MCP server. Use this skill whenever the user wants to create, modify, or inspect Inventor parts (.ipt) — building flanges, shafts, nuts, brackets, machine parts; drilling holes; adding fillets, chamfers, revolves, extrudes; saving or exporting parts; or troubleshooting "why didn't my hole cut" / "edge index changed" / "chamfer failed" issues. Triggers on Indonesian phrases like "bikin part", "buat flens", "tambah lubang", "chamfer", "fillet", Ukrainian phrases like "побудуй деталь", "зроби фланець", "додай отвір", and English equivalents. For drawings use inventor-drawing, for assemblies inventor-assembly. Use whenever the user mentions DIN/ISO standard parts, mechanical engineering CAD work, or the `mcp__inventor__*` tools.
 ---
 
-# Autodesk Inventor 2026 — Parametric Modeling via MCP
+# Autodesk Inventor 2027 — Parametric Modeling via MCP
 
 ## When this skill applies
 
@@ -29,6 +29,28 @@ The MCP server has power tools that replace ad-hoc console scripts:
 
 Feature tools (extrude, hole, flange, ...) return an auto-report suffix like
 `| V 23497 (-503 mm³) | F7 E14` — separate volume-check calls are unnecessary.
+
+## Inventor 2027 differences (verified on 2027.1)
+
+- Face type codes changed meaning against the old notes: 5890 plane, 5891 cylinder,
+  5893 cone, 5895 torus, 5896 sphere, 5897 B-spline (5892 / 5894 are the elliptical
+  variants). `list_faces` / `find_face` use the 2027 table.
+- A cut sketched **on a body face** must go `direction="negative"`: the sketch normal points
+  out of the body, and a positive cut removes nothing without an error.
+- `hole()` drills from the XY plane and cuts a body above or below it, through-all and blind
+  tapped alike. Tapped holes are cut at the minor diameter (M10x1.5: 8.376 mm).
+- A chamfer on one edge of a loop tangent to fillets runs around the whole tangent chain.
+- New documents can raise a **Style Conflict** dialog that blocks every COM call;
+  `create_part` sets `SilentOperation` around `Documents.Add` so it does not appear.
+  Other dialogs (template migration, errors) still block: if a call hangs, ask the user
+  to look at Inventor. Never click or dismiss them yourself.
+- `export_document` finds translators by ClassId (their names changed in 2027).
+- Tools act on the document `create_part` / `create_assembly` / `create_drawing` made, even
+  if the user clicks another tab meanwhile. `inv.release_document()` drops that pin.
+- An extrude with `operation="new"` makes a second body; later cuts and `inspect` see
+  body 1 only.
+
+Full notes: `docs/inventor-2027-notes.md`.
 
 ## Core mental model
 
@@ -129,6 +151,10 @@ hole_idx = features[-1]["index"]
 inv.circular_pattern(feature_index=hole_idx, count=8, angle=360, axis="Z")
 ```
 
+Any repeated hole set that is symmetric about an axis (two holes at x = ±30 too: count 2,
+angle 360) should be one hole plus a pattern: a drawing hole note then prints "2x Ø11 THRU"
+by itself, and separate holes never get the count.
+
 ### DIN 934 chamfer — done by revolve cut, NOT `chamfer()`
 
 The `Chamfer` feature in Inventor knocks the same width off each of the 12 edges of a hex prism — creating 12 small flat facets. The real DIN 934 chamfer is a **conical** surface. Use `revolve(axis="Z", operation="cut")` with a triangle profile on the XZ plane. See sibling skill `inventor-din-parts` for full templates.
@@ -188,7 +214,7 @@ For a typical back face at Y=+225 (outer normal +Y), the mapping is often
 `sketch_X = world_X + half_width`, `sketch_Y = top_world_Z - world_Z` (flipped).
 Confirm via `SketchToModelSpace` for the actual face.
 
-**Flange API quirks** (Inventor 2026 — verified empirically):
+**Flange API quirks** (found on 2026; the wrapper's workarounds pass the 2027 audit):
 - `CreateFlangeDefinition(Edges, AngleRadians, DistanceIgnored)` — second arg must be
   RADIANS (`math.radians(90)` → 1.5708), not degrees. Pass `90` and Inventor stores 5156°.
 - The Distance argument is silently IGNORED — the flange always defaults to 25mm height.
@@ -318,30 +344,26 @@ Verify with `sketch.SketchToModelSpace(tg.CreatePoint2d(1,0))` when unsure.
 `doc.SaveAs(path)` fails with E_INVALIDARG when the file is already open under that
 name. Re-saves go through `doc.Save()` (wrapper: `inv.save_document()` with no path).
 
-### Type library / gencache for API discovery
+### Reading the type library for API discovery
 
-When dynamic dispatch returns `Type mismatch` and you can't figure out what types
-the API wants, you can run a probe via `gencache.EnsureDispatch` in a separate
-Python process. This gives you typed bindings with full inspectable signatures.
+When dynamic dispatch returns `Type mismatch`, or you need an enum value or a method's
+argument names, read the type library directly. It needs no Inventor connection and,
+unlike `gencache.EnsureDispatch`, leaves no `gen_py` cache that breaks `GetActiveObject`.
 
 ```python
-# probe_typelib.py — run in a SEPARATE process, then DELETE the gen_py cache
-from win32com.client import gencache, CastTo
-import inspect
-app = gencache.EnsureDispatch("Inventor.Application")
-part_doc = CastTo(app.ActiveDocument, "PartDocument")
-comp = CastTo(part_doc.ComponentDefinition, "SheetMetalComponentDefinition")
-smf = CastTo(comp.Features, "SheetMetalFeatures")
-for m in dir(type(smf.FlangeFeatures)):
-    if m.startswith("_"): continue
-    attr = getattr(type(smf.FlangeFeatures), m)
-    if callable(attr):
-        print(f"{m}{inspect.signature(attr)}")
+import pythoncom
+tlb = pythoncom.LoadTypeLib(r"<Inventor install>\Bin\RxInventor.tlb")
+for i in range(tlb.GetTypeInfoCount()):
+    if tlb.GetDocumentation(i)[0] != "PartsLists":
+        continue
+    ti = tlb.GetTypeInfo(i)
+    for f in range(ti.GetTypeAttr().cFuncs):
+        fd = ti.GetFuncDesc(f)
+        print(ti.GetNames(fd.memid), ti.GetDocumentation(fd.memid)[1])
 ```
 
-After the probe, **always** delete `%LOCALAPPDATA%\Temp\gen_py\3.12` (or your Python
-version) — otherwise `GetActiveObject` in subsequent sessions fails with
-`KeyError: '_dispobj_'`. Verified the hard way.
+Enums are `TKIND_ENUM` type infos; `ti.GetVarDesc(v).value` gives each value. If a
+`gen_py` cache ever appears, delete `%LOCALAPPDATA%\Temp\gen_py`.
 
 ## Diagnostic patterns — verify the build did what you intended
 
@@ -360,15 +382,17 @@ rb = body.RangeBox
 print(f"Z: {rb.MinPoint.Z*10:.2f} .. {rb.MaxPoint.Z*10:.2f} mm")
 ```
 
-**Face SurfaceType decoder** (Inventor 2026):
+**Face SurfaceType decoder** (2027 type library):
 | Code | Meaning |
 |---|---|
 | 5890 | Plane |
 | 5891 | Cylinder |
-| 5892 | Cone (sometimes appears as 5893) |
-| 5893 | Cone (variant) |
-| 5894 | Sphere |
+| 5892 | Elliptical cylinder |
+| 5893 | Cone |
+| 5894 | Elliptical cone |
 | 5895 | Torus |
+| 5896 | Sphere |
+| 5897 | B-spline |
 
 Finding the chamfer in `Face types: {'Plane': 8, 'Cylinder': 1, 'Cone': 2}` confirms revolve-cut produced real conical surfaces.
 
@@ -381,11 +405,11 @@ for i in range(1, body.Edges.Count + 1):
         print(f"Edge {i} at Z={z_mid:.1f}mm")
 ```
 
-## Inventor 2026 API gotchas (vs older docs)
+## Inventor 2026/2027 API gotchas (vs older docs)
 
-These differ from the official documentation and older Inventor versions — the docs are wrong for 2026.
+These differ from the official documentation and older Inventor versions; all still hold in 2027.
 
-| | Old / docs | Inventor 2026 actually wants |
+| | Old / docs | Inventor 2026/2027 actually wants |
 |---|---|---|
 | DocumentType | varies | `12290` for parts |
 | Direction enum | varies | `20993/20994/20995` (pos/neg/sym) |
@@ -422,7 +446,7 @@ Standard coarse-pitch table (auto-applied when `pitch` is omitted):
 | M12 | 1.75 | M30 | 3.5  |
 | M14 | 2.0  | M36 | 4.0  |
 
-Designation format: **integer pitches drop the decimal** — `M16x2` not `M16x2.0`. The `hole()` wrapper handles this. ThreadType string must be **exactly** `"ISO Metric profile"` (from `C:\Users\Public\Documents\Autodesk\Inventor 2026\Design Data\XLS\en-US\thread.xlsx`).
+Designation format: **integer pitches drop the decimal** — `M16x2` not `M16x2.0`. The `hole()` wrapper handles this. ThreadType string must be **exactly** `"ISO Metric profile"` (from `C:\Users\Public\Documents\Autodesk\Inventor 2027\Design Data\XLS\en-US\thread.xlsx`).
 
 ## File locations
 
@@ -432,7 +456,8 @@ Designation format: **integer pitches drop the decimal** — `M16x2` not `M16x2.
 | API wrapper | `src/inventor_api.py` |
 
 | Templates | `app.FileLocations.TemplatesPath` (auto-resolved) |
-| Thread DB | `C:\Users\Public\Documents\Autodesk\Inventor 2026\Design Data\XLS\en-US\thread.xlsx` |
+| Thread DB | `C:\Users\Public\Documents\Autodesk\Inventor 2027\Design Data\XLS\en-US\thread.xlsx` |
+| 2027 field notes | `docs/inventor-2027-notes.md` |
 
 
 ## When user reports "feature didn't work"
@@ -443,13 +468,16 @@ Designation format: **integer pitches drop the decimal** — `M16x2` not `M16x2.
 4. **If revolve cut had no effect**: profile was probably in air (wrong Z side). Flip the sign of Y coords in the profile.
 5. **If second chamfer destroyed first**: you passed two separate `chamfer()` calls. Combine into one with all edge indices.
 
-## MCP server restart caveat
+## After editing the server code
 
-After editing `inventor_api.py` or `server.py`, the **running MCP server still uses the old code** (Python loads modules on startup). Either restart Claude Code, or run the script via plain `python -X utf8 my_script.py` — direct Python imports the latest module file.
-
-The `mcp__inventor__*` tools will return outputs in the OLD format string until restart, even though the underlying logic may have changed.
+- Changes to `inventor_api.py`: call `reload_api()`; the tools use the new code at once.
+- Changes to `server.py` (new tools, new parameters, docstrings): the MCP client must
+  restart the server before the tool list changes. Until then, call new wrapper methods
+  through `execute_python` (`inv.method(...)`), or run a script with
+  `python -X utf8 script.py` that imports `src.server`.
 
 ## See also
 
-- Sibling skill `inventor-din-parts` — ready-to-use parametric templates for DIN 934 nuts, DIN 933 bolts, DIN 125 washers, DIN 2573 flanges.
-- Project doc the project docs — duplicates much of this but with the historical "discovered the hard way" context.
+- Sibling skill `inventor-din-parts` — ready-to-use parametric templates for DIN 934 nuts, DIN 933 bolts, DIN 125 washers, DIN 2573 flanges. In an assembly, Content Center parts (`place_content_center`) are usually the better choice.
+- Sibling skills `inventor-drawing` (drawings, PDF) and `inventor-assembly` (assemblies, BOM, exploded copies).
+- `docs/inventor-api-notes.md` (2026) and `docs/inventor-2027-notes.md` — the "discovered the hard way" context.

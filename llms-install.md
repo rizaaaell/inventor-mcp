@@ -5,7 +5,7 @@ Step-by-step setup of the inventor-mcp server. Follow in order.
 ## Prerequisites check
 
 1. **Windows only** — this server drives Autodesk Inventor through COM; it cannot work on macOS/Linux.
-2. **Autodesk Inventor** must be installed (2026 recommended; 2024/2025 may work with enum differences). Verify:
+2. **Autodesk Inventor** must be installed (this fork is tested on 2027.1; 2026 worked upstream). Verify:
    ```powershell
    Test-Path "C:\Program Files\Autodesk"
    ```
@@ -18,13 +18,13 @@ Step-by-step setup of the inventor-mcp server. Follow in order.
 
 1. Clone the repository to a stable location (avoid paths that may be deleted):
    ```powershell
-   git clone https://github.com/NeonGlay/inventor-mcp.git
+   git clone https://github.com/rizaaaell/inventor-mcp.git
    cd inventor-mcp
    ```
 
 2. Install Python dependencies:
    ```powershell
-   pip install "mcp[cli]" pywin32
+   pip install "mcp[cli]>=1.0.0,<2" "pywin32>=306"   # keep mcp below 2: the server uses the 1.x FastMCP API
    ```
 
 3. Register the MCP server in the client's MCP configuration. The server uses
@@ -46,7 +46,7 @@ Step-by-step setup of the inventor-mcp server. Follow in order.
 
 4. Verify: restart the MCP client, then start Autodesk Inventor (the server
    connects to a **running** Inventor instance). Call the `connect` tool —
-   expected response: `Connected to running Inventor 2026`.
+   expected response: `Connected to running Inventor 2027.1`.
 
 ## Smoke test
 
