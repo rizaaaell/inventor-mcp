@@ -50,7 +50,7 @@ def add_document_type_field(doc) -> str:
     return "DOCUMENT TYPE field added"
 
 
-# Fields whose values outgrow their box at the template's 2.5 mm, e.g. "Rachmadi Norcahyo"
+# Fields whose values outgrow their box at the template's 2.5 mm, e.g. a 17-character approver name
 # (17 characters) in the 24 mm APPROVED BY box wraps onto the label.
 SMALL_FIELDS = ("ENGINEER", "CHECKED BY", "DOCUMENT TYPE")
 

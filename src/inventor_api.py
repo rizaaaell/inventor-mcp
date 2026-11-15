@@ -1363,13 +1363,29 @@ class InventorConnection:
             raise RuntimeError(f"Active document is not a drawing (type={doc.DocumentType}).")
         return doc
 
+    # Team-only settings (names, private templates) live in the private assets checkout
+    # under references/; a profile there is laid over the public one of the same name.
+    PRIVATE_PROFILE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                       "references", "drawing_profiles")
+
+    @classmethod
+    def _merge(cls, base: dict, extra: dict) -> dict:
+        out = dict(base)
+        for k, v in extra.items():
+            out[k] = cls._merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+        return out
+
     def load_profile(self, name: str = "default") -> dict:
-        path = os.path.join(self.PROFILE_DIR, f"{name}.json")
-        if not os.path.exists(path):
-            available = sorted(f[:-5] for f in os.listdir(self.PROFILE_DIR) if f.endswith(".json"))
+        found = [os.path.join(d, f"{name}.json") for d in (self.PROFILE_DIR, self.PRIVATE_PROFILE_DIR)]
+        found = [p for p in found if os.path.exists(p)]
+        if not found:
+            available = sorted({f[:-5] for d in (self.PROFILE_DIR, self.PRIVATE_PROFILE_DIR)
+                                if os.path.isdir(d) for f in os.listdir(d) if f.endswith(".json")})
             raise ValueError(f"No drawing profile {name!r}. Available: {available}")
-        with open(path, encoding="utf-8") as f:
-            profile = json.load(f)
+        profile = {}
+        for path in found:
+            with open(path, encoding="utf-8") as f:
+                profile = self._merge(profile, json.load(f))
         profile["name"] = name
         return profile
 

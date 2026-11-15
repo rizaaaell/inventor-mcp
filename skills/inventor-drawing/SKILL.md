@@ -110,18 +110,34 @@ each circle, in chain line.
 10. Chamfers: `add_chamfer_note` on a view where the chamfer is a slanted line,
    `prefix="2x "` for equal chamfers.
 
-### Tolerances and GD&T
+### Tolerances, datums and GD&T: required on every machined part
 
-- `set_tolerance(index, "fit", fit="H7")` for a bore on a shaft, `"symmetric"` /
-  `"deviation"` / `"basic"` as needed. General tolerances are already in the title block.
-- `add_datum` on the functional faces/axes; `attach=False` puts the triangle exactly on a
-  point such as the extension line of a Ø dimension (datum = that axis).
-- `add_gdt`: flatness on a mating face, perpendicularity to a datum, position with
-  `diameter_zone=True` for bolt holes. `leader=False` puts a bare frame right under a
-  hole note.
-- `add_surface_finish` with "Ra 1,6" on fits, "Ra 3,2" on machined faces; the general
-  finish goes in the title block field SURFACE FINISH.
-- Tolerance and roughness values you pick are proposals; say so to the user.
+A part drawing without datums is not finished. The general tolerances in the title block
+cover plain sizes only; every functional feature needs its own control. Before export,
+each machined part drawing has **all** of these:
+
+1. **Datums.** A: the primary functional face (the face it mounts or seats on) or the
+   main bore/axis for a turned part. B: the locating axis or bore (or the second face).
+   C only when a third direction matters. `add_datum` on the face; for an axis,
+   `attach=False` with the triangle on the extension line of the Ø dimension.
+2. **Fits** on every mating diameter: `set_tolerance(index, "fit", fit="H7")` for a bore
+   on a shaft or bearing, "h6"/"k6"/"m6" for the shaft side, "H8" for a sliding or weld
+   locating fit.
+3. **GD&T on what makes the part work:**
+   - mating faces: flatness, or perpendicularity to the axis datum;
+   - bolt or stud hole patterns: position Ø, `diameter_zone=True`, to A and B, as a frame
+     under the hole note or diameter (`leader=False`);
+   - turned seats and faces that run: circular runout (or total runout) to the axis datum;
+   - coaxial steps: runout rather than concentricity.
+4. **Surface finish:** "Ra 1,6" on fits and bearing seats, "Ra 3,2" on machined mating
+   faces, the general finish (e.g. "Ra 6,3") in the title block field SURFACE FINISH.
+
+Every frame refers only to datums that exist on the sheet. Values you choose are
+proposals unless the user gave them; say so in the report. Exceptions: flame or laser cut
+plates that are not machined still get datum A/B and hole position, but no fit or Ra;
+standard (Content Center) parts get no drawing. An assembly or weldment drawing carries the
+controls that only exist after joining (e.g. runout of a welded flange face to the shaft
+axis) with datums on the assembly view.
 
 ### Title block
 
@@ -145,6 +161,11 @@ the file name until set). Fill them before drawing:
 
 ## Verify, every time
 
+0. Checklist for a part drawing, all yes before export: views define every feature;
+   each size appears once, outside the part; datums A (and B) shown; every mating
+   diameter has a fit; hole patterns have position to the datums; mating or running faces
+   have flatness, perpendicularity or runout; Ra on fits and in the SURFACE FINISH field;
+   title block complete (MATERIAL stated, PART NUMBER, TITLE).
 1. `list_views()` must report `"problems": []` (views outside the border, overlaps,
    texts on texts, texts outside the border).
 2. `export_sheet_png(path)` and **open the PNG with Read**. Look for dimensions inside
