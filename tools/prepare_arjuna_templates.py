@@ -116,8 +116,13 @@ def center_fields(doc) -> str:
         labels = [b for b in boxes if not _is_value(b)]
         tg = doc.Parent.TransientGeometry
         for value in (b for b in boxes if _is_value(b)):
+            # A value with a label of its own name ("DOCUMENT TYPE:") belongs in the label's
+            # cell, even when it was first placed below it, in the next row.
+            name = value.Text.strip().strip("<>").upper()
+            own = next((lb for lb in labels if lb.Text.strip().rstrip(":").strip().upper() == name), None)
+            x, y = (own.Origin.X + 0.3, own.Origin.Y - 0.2) if own else (value.Origin.X, value.Origin.Y)
             try:
-                left, right, bottom, top = _cell(sketch, value.Origin.X, value.Origin.Y)
+                left, right, bottom, top = _cell(sketch, x, y)
             except ValueError:
                 continue  # not inside a closed cell
             inside = [lb for lb in labels if left <= lb.Origin.X < right and bottom < lb.Origin.Y <= top + 0.05]

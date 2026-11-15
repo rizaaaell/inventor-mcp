@@ -48,8 +48,9 @@ library are not touched.
 
 1. `python -X utf8 -u tools/prepare_arjuna_templates.py` copies every template from
    `references/templates/` to `references/templates/2027/`, saves it once in this
-   Inventor, adds a DOCUMENT TYPE prompt under its label, and sets the name fields to
-   2 mm so "Rachmadi Norcahyo" fits the APPROVED BY box. Rerunning it keeps existing
+   Inventor, adds a DOCUMENT TYPE prompt under its label, sets the name fields to
+   2 mm so the APPROVED BY name fits, centres every title block value in its cell (in
+   the space under the cell's label) and turns MATERIAL into a prompt the tools fill. Rerunning it keeps existing
    copies (and their imported styles); `--force` starts over from the originals.
 2. The Arjuna styles (`Arjuna Fix.styxml`: dimension style "Arjuna", one decimal,
    comma, no trailing zeros, Tahoma 3.5 mm text, leader; `Mini Center Mark` and
@@ -57,8 +58,8 @@ library are not touched.
    Manage → Styles Editor → Import each `.styxml`, Save and Close, close the template,
    and run the script again: it copies the imported leader and text styles to
    "Arjuna Leader" and "Arjuna Note Text" and makes "Arjuna Standard" active with
-   "Arjuna Object Defaults" pointing at them. Done for
-   `Template Landscape Arjuna FIX A3.idw` on 2026-11-14; the other four still need it.
+   "Arjuna Object Defaults" pointing at them. Done for all five templates (A3 on
+   2026-11-14, A4, A2 and the two portrait ones on 2026-11-15).
 
    The copies matter: with the project's style library on, a new drawing replaces every
    style whose name the library also has (`Object Defaults (ISO)`, `General (ISO)`,
@@ -67,5 +68,5 @@ library are not touched.
 3. Close the template in Inventor before making drawings: `Documents.Add` refuses a
    template that is open.
 
-Until a template has the styles, the profile's number format settings still give the
-Arjuna look for dimensions.
+A template without the imported styles still gets the Arjuna number format from the
+profile's settings, but not the Arjuna leader and text styles.
