@@ -64,7 +64,7 @@ Do not use `win32com.client.gencache.EnsureDispatch` against the same Python ins
 `gen_py` cache breaks `GetActiveObject`. Read `RxInventor.tlb` with
 `pythoncom.LoadTypeLib` instead (see the modeling skill).
 
-## Tools (73)
+## Tools (79)
 
 All lengths in mm, angles in degrees.
 
@@ -88,13 +88,14 @@ through or blind), `hole_linear` (placed from two edges, counterbore), `circular
 `sheet_metal_cut`.
 
 **Assemblies**: `create_assembly`, `place_component`, `list_occurrences`,
-`list_occurrence_geometry`, `add_constraint` (mate, flush, insert, angle, tangent; geometry
+`list_occurrence_geometry`, `set_properties` (Part Number, Description, ...), `add_constraint` (mate, flush, insert, angle, tangent; geometry
 picked by selectors such as `circle:45,0,20,5.5` in part coordinates), `get_dof`, `get_bom`,
 `analyze_interference` (flags bolt-in-tapped-hole overlaps as thread artifacts),
 `pattern_component`, `list_content_center`, `place_content_center`. Saving an assembly
 also writes its constraint order to `<name>.constraints.json`.
 
-**Exploded views**: `create_exploded_copy`, `explode_components`, `add_explode_trails`.
+**Exploded views**: `create_exploded_copy`, `auto_explode` (from the constraint log),
+`explode_components`, `add_explode_trails`.
 Inventor 2027's presentation API cannot add tweaks, so exploded drawings come from a
 constraint-free copy of the assembly.
 
@@ -104,7 +105,8 @@ assemblies, design view, turned iso camera), `add_projected_view`, `add_section_
 `add_dimension` (linear, diameter, radius, PCD, angle), `list_dimensions`,
 `delete_dimension`, `move_dimension`, `set_tolerance` (symmetric, deviation, limits, ISO
 fits, basic), `add_hole_note`, `add_chamfer_note`, `add_gdt`, `add_datum`,
-`add_surface_finish`, `set_title_block`, `add_parts_list`, `add_balloons`, `list_views`
+`add_surface_finish`, `list_notes`, `delete_note`, `move_view`, `delete_view`,
+`set_title_block` (MATERIAL always stated), `add_parts_list`, `add_balloons`, `list_views`
 (layout checker), `export_sheet_png`, `export_pdf`.
 
 ## Drawing profiles
@@ -138,7 +140,7 @@ With Inventor running:
 
 ```
 python -X utf8 -u tests/smoke.py        # 8 regression cases, volumes and drawing layout
-python -X utf8 -u tests/audit_tools.py  # every tool, 105 checks
+python -X utf8 -u tests/audit_tools.py  # every tool, 111 checks
 ```
 
 Test output goes to `C:\inventor-test\`. `experiments/` holds the full scripts behind the

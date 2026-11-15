@@ -2175,16 +2175,20 @@ class InventorConnection:
         return best, best_d * 10 / view.Scale
 
     def add_hole_note(self, view: str, x: float, y: float, text_x: float, text_y: float,
-                      second_line: str = "") -> str:
+                      second_line: str = "", count: int = 0) -> str:
         """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for a patterned hole.
-        second_line goes under it, e.g. "EQ SP ON PCD Ø90". Points are model mm from the view center."""
+        second_line goes under it, e.g. "EQ SP ON PCD Ø90". count > 0 writes "<count>x" for
+        holes made as separate features, which Inventor does not count.
+        Points are model mm from the view center."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
         curve, miss = self._nearest_curve(v, x, y, circular=True)
         note = sheet.DrawingNotes.HoleThreadNotes.Add(self._view_point(v, text_x, text_y), curve)
         quantity = self._profile_of(doc).get("hole_note_quantity")
-        if quantity:
+        if count > 0:
+            note.FormattedHoleThreadNote = f"{count}x " + note.FormattedHoleThreadNote
+        elif quantity:
             note.FormattedQuantityNote = quantity
             note.FormattedHoleThreadNote = "<QuantityNote/>" + note.FormattedHoleThreadNote
         if second_line:
@@ -2451,19 +2455,50 @@ class InventorConnection:
                 fields[name] = (t, "prompt")
         return fields
 
-    def _set_material(self, model, name: str) -> None:
+    _UNSET_MATERIALS = ("generic", "default", "")
+
+    def _material_statement(self, model) -> str:
+        """What MATERIAL should say: the part's material, the one material all parts of an
+        assembly share, or the profile's statement for mixed or unassigned materials."""
+        profile = self._profile_of(self.active_drawing())
+        none = profile.get("material_none", "NONE")
+        if model.DocumentType == 12290:
+            name = model.ActiveMaterial.DisplayName
+            return none if name.lower() in self._UNSET_MATERIALS else name
+        names = set()
+        refs = model.AllReferencedDocuments
+        for i in range(1, refs.Count + 1):
+            d = refs.Item(i)
+            if d.DocumentType == 12290:
+                name = d.ActiveMaterial.DisplayName
+                if name.lower() not in self._UNSET_MATERIALS:
+                    names.add(name)
+        if not names:
+            return none
+        if len(names) == 1:
+            return names.pop()
+        return profile.get("material_mixed", "VARIOUS, SEE PART DRAWINGS")
+
+    def _set_material(self, model, name: str, strict: bool = True) -> bool:
+        """Give a part the library material called name. strict False returns False instead
+        of raising when there is no such material (MATERIAL then only prints the text)."""
         if model.DocumentType != 12290:
-            raise ValueError("MATERIAL can only be set on a part")
+            if strict:
+                raise ValueError("MATERIAL can only be set on a part")
+            return False
         lib = self.app.ActiveMaterialLibrary.MaterialAssets
         names = [lib.Item(i).DisplayName for i in range(1, lib.Count + 1)]
         match = next((n for n in names if n.lower() == name.lower()), None)
         if match is None:
+            if not strict:
+                return False
             close = [n for n in names if name.lower().split()[0] in n.lower()][:8]
             raise ValueError(f"No material {name!r} in the active library. Close: {close}")
         assets = model.MaterialAssets
         local = next((assets.Item(i) for i in range(1, assets.Count + 1)
                       if assets.Item(i).DisplayName == match), None)
         model.ActiveMaterial = local or lib.Item(match).CopyTo(model)
+        return True
 
     def set_title_block(self, fields: dict) -> str:
         """Fill title block fields by the names the title block shows, e.g. TITLE, PART NUMBER.
@@ -2492,6 +2527,15 @@ class InventorConnection:
         for name, value in wanted.items():
             box, source = available[name]
             if source == "prompt":
+                if name == "MATERIAL" and model is not None and value.strip().upper() != "AUTO":
+                    # A library material name also becomes the part's material; NONE or a
+                    # statement is only printed.
+                    if self._set_material(model, value, strict=False):
+                        changed_model.append(name)
+                if name == "MATERIAL" and value.strip().upper() == "AUTO":
+                    if model is None:
+                        raise ValueError("MATERIAL auto needs a view of the model first")
+                    value = self._material_statement(model)
                 sheet.TitleBlock.SetPromptResultText(box, value)
                 continue
             target = doc
@@ -3234,3 +3278,240 @@ class InventorConnection:
         finally:
             sketch.ExitEdit()
         return f"{len(merged)} trail line(s) on {view} for {len(paths)} moved component(s)"
+
+    def _seat_face(self, proxy, k: int):
+        """(coordinate in mm along assembly axis k, outward side +1/-1 or None) of the face a
+        constraint geometry sits on: the planar face of a circular edge, or a planar face."""
+        faces = [proxy]
+        try:
+            faces = [proxy.Faces.Item(i) for i in range(1, proxy.Faces.Count + 1)]
+        except Exception:
+            pass
+        for f in faces:
+            try:
+                if f.SurfaceType != 5890:
+                    continue
+                p = f.PointOnFace
+                normal = f.Evaluator.GetNormalAtPoint([p.X, p.Y, p.Z], [0.0, 0.0, 0.0])[1]
+                if abs(normal[k]) > 0.5:  # the evaluator gives the outward normal
+                    return (p.X, p.Y, p.Z)[k] * 10, (1 if normal[k] > 0 else -1)
+            except Exception:
+                continue
+        for get in (lambda g: g.Geometry.Center, lambda g: g.Plane.RootPoint, lambda g: g.Line.RootPoint):
+            try:
+                p = get(proxy)
+                return (p.X, p.Y, p.Z)[k] * 10, None
+            except Exception:
+                continue
+        raise ValueError("Cannot locate the constraint geometry")
+
+    def auto_explode(self, spacing: float = 20, axis: str = "Z") -> str:
+        """Explode the active exploded copy along one assembly axis, from the constraint log
+        of the assembly it was copied from.
+
+        Each component moves away from the component it was constrained to (its first insert
+        or mate), off the outward side of the face it sits on, far enough to clear it (a bolt
+        by the length inside its washer and flanges) plus spacing; moves add up along the chain.
+        Pattern instances follow the original at the same height. Components with no such
+        constraint, e.g. the grounded one, stay.
+        """
+        k = {"X": 0, "Y": 1, "Z": 2}.get(axis.upper())
+        if k is None:
+            raise ValueError("axis must be X, Y or Z")
+        doc = self.active_assembly()
+        log_path = os.path.splitext(doc.FullFileName)[0] + ".explode.json"
+        if not os.path.exists(log_path):
+            raise RuntimeError("Active assembly is not an exploded copy; use create_exploded_copy first")
+        with open(log_path, encoding="utf-8") as f:
+            explode_log = json.load(f)
+        if explode_log["moves"]:
+            raise RuntimeError("Components were moved already; auto_explode needs a fresh exploded copy")
+        source = os.path.join(os.path.dirname(doc.FullFileName), explode_log["source"])
+        constraint_log = os.path.splitext(source)[0] + ".constraints.json"
+        if not os.path.exists(constraint_log):
+            raise RuntimeError(f"No constraint log {os.path.basename(constraint_log)}: the assembly must "
+                               "be built with add_constraint and saved with save_document")
+        with open(constraint_log, encoding="utf-8") as f:
+            steps = json.load(f)["constraints"]
+
+        occs = doc.ComponentDefinition.Occurrences
+        span, files = {}, {}
+        for i in range(1, occs.Count + 1):
+            o = occs.Item(i)
+            r = o.RangeBox
+            span[o.Name] = ((r.MinPoint.X, r.MinPoint.Y, r.MinPoint.Z)[k] * 10,
+                            (r.MaxPoint.X, r.MaxPoint.Y, r.MaxPoint.Z)[k] * 10)
+            files[o.Name] = os.path.normcase(o.ReferencedDocumentDescriptor.FullDocumentName)
+        names = {" ".join(n.lower().split()): n for n in span}
+
+        def real(name):
+            return names.get(" ".join(name.lower().split()))
+
+        seat = {}  # component -> (parent, face coordinate along the axis)
+        for step in steps:
+            child, parent = real(step["second"]["component"]), real(step["first"]["component"])
+            if step["kind"] in ("insert", "mate") and child and parent and child not in seat and child != parent:
+                seat[child] = (parent, *self._seat_face(self._geometry(parent, step["first"]["geometry"]), k))
+
+        moves = {}
+
+        def move_of(name, depth=0):
+            if name in moves:
+                return moves[name]
+            if name not in seat or depth > 50:
+                moves[name] = 0.0
+                return 0.0
+            parent, face, side = seat[name]
+            lo, hi = span[parent]
+            # Off the outward side of the seat face; a work plane has no side, so use the
+            # side of the parent's middle it lies on.
+            sign = side or (1 if face >= (lo + hi) / 2 else -1)
+            c_lo, c_hi = span[name]
+            depth_in = max(0.0, face - c_lo) if sign > 0 else max(0.0, c_hi - face)
+            moves[name] = move_of(parent, depth + 1) + sign * (depth_in + spacing)
+            return moves[name]
+
+        for name in span:
+            move_of(name)
+        # Pattern instances were never constrained: copy the move of the constrained
+        # component made from the same file at the same height along the axis.
+        followed = []
+        for name in span:
+            if name in seat or moves[name]:
+                continue
+            mid = sum(span[name]) / 2
+            twin = next((s for s in seat if files[s] == files[name] and abs(sum(span[s]) / 2 - mid) < 0.5), None)
+            if twin:
+                moves[name] = moves[twin]
+                followed.append(name)
+
+        groups = {}
+        for name, d in moves.items():
+            if abs(d) > 1e-6:
+                groups.setdefault(round(d, 3), []).append(name)
+        vector = [0.0, 0.0, 0.0]
+        for d, group in sorted(groups.items()):
+            vector[k] = d
+            self.explode_components(", ".join(group), *vector)
+        still = [n for n, d in moves.items() if abs(d) <= 1e-6]
+        lines = [f"{d:+g} mm: {', '.join(g)}" for d, g in sorted(groups.items())]
+        return (f"Exploded along {axis.upper()}, spacing {spacing:g} mm. " + " | ".join(lines)
+                + f" | stays: {', '.join(still) or 'none'}")
+
+    # ---------- Editing drawings and model properties ----------
+
+    def move_view(self, view: str, x: float = 0, y: float = 0, scale: float = 0) -> str:
+        """Move a view's centre to (x, y) sheet mm and/or give it a new scale. A result that
+        would leave the border or overlap something is undone and reported."""
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        old_center, old_scale = v.Center, v.Scale
+        if scale:
+            try:
+                v.ScaleFromBase = False  # a projected view otherwise keeps its parent's scale
+            except Exception:
+                pass
+            v.Scale = scale
+        if x or y:
+            v.Center = self._sheet_point(x, y)
+        rect = self._view_rect(v)
+        area = self._drawing_area(sheet)
+        problems = []
+        if rect[0] < area[0] or rect[1] < area[1] or rect[2] > area[2] or rect[3] > area[3]:
+            problems.append("outside the border")
+        if sheet.TitleBlock is not None and self._overlap(rect, self._rect(sheet.TitleBlock)):
+            problems.append("overlaps the title block")
+        for i in range(1, sheet.DrawingViews.Count + 1):
+            other = sheet.DrawingViews.Item(i)
+            if other.Name != v.Name and self._overlap(rect, self._view_rect(other)):
+                problems.append(f"overlaps view {other.Name}")
+        for i in range(1, sheet.PartsLists.Count + 1):
+            if self._overlap(rect, self._rect(sheet.PartsLists.Item(i))):
+                problems.append("overlaps the parts list")
+        if problems:
+            if scale:
+                v.Scale = old_scale
+            v.Center = old_center
+            raise ValueError(f"View {view} would sit at {self._fmt_rect(rect)}: {'; '.join(problems)}. Left as it was.")
+        return f"View {v.Name}: scale {v.Scale:g}, {self._fmt_rect(rect)}"
+
+    def delete_view(self, view: str) -> str:
+        """Delete a view. Views projected or cut from it go with it, as in Inventor."""
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        before = {sheet.DrawingViews.Item(i).Name for i in range(1, sheet.DrawingViews.Count + 1)}
+        v.Delete()
+        after = {sheet.DrawingViews.Item(i).Name for i in range(1, sheet.DrawingViews.Count + 1)}
+        return f"Deleted views: {', '.join(sorted(before - after))}"
+
+    def _notes(self, sheet):
+        notes = []
+        for kind, collection in (("hole", sheet.DrawingNotes.HoleThreadNotes),
+                                 ("chamfer", sheet.DrawingNotes.ChamferNotes)):
+            for i in range(1, collection.Count + 1):
+                notes.append((kind, collection.Item(i)))
+        return notes
+
+    def list_notes(self) -> list[dict]:
+        """Hole and chamfer notes on the active sheet with an index for delete_note."""
+        out = []
+        for k, (kind, note) in enumerate(self._notes(self.active_drawing().ActiveSheet), 1):
+            text = note.Text.Text if kind == "hole" else note.Text
+            r = self._rect(note.Text) if kind == "hole" else self._rect(note)
+            out.append({"index": k, "kind": kind, "text": text.replace("\n", " / "),
+                        "center_mm": [round((r[0] + r[2]) / 2, 1), round((r[1] + r[3]) / 2, 1)]})
+        return out
+
+    def delete_note(self, indices: str) -> str:
+        """Delete hole or chamfer notes by index from list_notes, e.g. to place them again."""
+        notes = self._notes(self.active_drawing().ActiveSheet)
+        picked = sorted({int(i) for i in indices.split(",") if i.strip()}, reverse=True)
+        for i in picked:
+            if not 1 <= i <= len(notes):
+                raise ValueError(f"No note {i}; list_notes shows {len(notes)}")
+        for i in picked:
+            notes[i - 1][1].Delete()
+        return f"Deleted {len(picked)} note(s)"
+
+    # Names people use for iProperties, mapped to (property set, property name).
+    _PROPERTIES = {
+        "PART NUMBER": ("Design Tracking Properties", "Part Number"),
+        "DESCRIPTION": ("Design Tracking Properties", "Description"),
+        "STOCK NUMBER": ("Design Tracking Properties", "Stock Number"),
+        "VENDOR": ("Design Tracking Properties", "Vendor"),
+        "PROJECT": ("Design Tracking Properties", "Project"),
+        "DESIGNER": ("Design Tracking Properties", "Designer"),
+        "ENGINEER": ("Design Tracking Properties", "Engineer"),
+        "CHECKED BY": ("Design Tracking Properties", "Checked By"),
+        "REVISION NUMBER": ("Inventor Summary Information", "Revision Number"),
+        "TITLE": ("Inventor Summary Information", "Title"),
+        "SUBJECT": ("Inventor Summary Information", "Subject"),
+        "AUTHOR": ("Inventor Summary Information", "Author"),
+        "COMMENTS": ("Inventor Summary Information", "Comments"),
+    }
+
+    def set_properties(self, model_path: str, fields: dict) -> str:
+        """Write iProperties of a part or assembly file and save it, e.g. Part Number and
+        Description, which BOMs and parts lists read. Other names become custom properties.
+        MATERIAL sets a part's material from the active library."""
+        path = os.path.abspath(model_path)
+        doc = self._open_model(path)
+        if doc.DocumentType not in (12290, 12291):
+            raise ValueError("set_properties works on .ipt and .iam files")
+        written = []
+        for key, value in fields.items():
+            name = key.replace("_", " ").strip().upper()
+            if name == "MATERIAL":
+                self._set_material(doc, str(value))
+            elif name in self._PROPERTIES:
+                set_name, prop = self._PROPERTIES[name]
+                doc.PropertySets.Item(set_name).Item(prop).Value = str(value)
+            else:
+                custom = doc.PropertySets.Item("Inventor User Defined Properties")
+                try:
+                    custom.Item(key).Value = str(value)
+                except Exception:
+                    custom.Add(str(value), key)
+            written.append(name)
+        doc.Save()
+        return f"{os.path.basename(path)}: {', '.join(written)} written and saved"

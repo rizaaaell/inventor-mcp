@@ -22,7 +22,8 @@
   },
   "title_block_defaults": {
     "DOCUMENT TYPE": "ENGINEERING DRAWING",
-    "APPROVED BY": "Rachmadi Norcahyo"
+    "APPROVED BY": "Rachmadi Norcahyo",
+    "MATERIAL": "auto"
   },
   "general_tolerances": {
     ".X": "0,2",
@@ -40,5 +41,7 @@
       "DESCRIPTION": 55
     }
   },
-  "balloon_arrowhead": "filled"
+  "balloon_arrowhead": "filled",
+  "material_none": "NONE",
+  "material_mixed": "VARIOUS, SEE PART DRAWINGS"
 }

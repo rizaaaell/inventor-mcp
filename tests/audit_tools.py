@@ -853,6 +853,81 @@ def assembly():
         srv.inv.active_document().Close(True)
         return f"{out} | {trails}"
     check("create_exploded_copy + explode_components + spin view + trails", exploded)
+
+    def auto():
+        close_audit_files()
+        srv.create_exploded_copy(str(OUT / "audit_assembly.iam"), str(OUT / "audit_auto.iam"))
+        before = {o["name"]: o["origin_mm"][2] for o in json.loads(srv.list_occurrences())}
+        out = srv.auto_explode(15, "Z")
+        after = {o["name"]: o["origin_mm"][2] for o in json.loads(srv.list_occurrences())}
+        # The pin inserted on the disk's top face goes up by the gap; the disk stays.
+        assert abs(after["audit_pin:1"] - before["audit_pin:1"] - 15) < 0.01, (before, after)
+        assert after["audit_disk:1"] == before["audit_disk:1"], (before, after)
+        return out
+    check("auto_explode", auto)
+    close_audit_files()
+
+
+def drawing_edits():
+    """Moving and deleting views, hole note count, notes, iProperties, MATERIAL statement."""
+    close_audit_files()
+    plate = OUT / "audit_plate.ipt"
+    srv.create_part("audit_plate")
+    srv.create_sketch("XY")
+    srv.draw_rectangle(0, 0, 80, 50)
+    srv.extrude(10)
+    srv.hole(x=-30, y=0, diameter=11)
+    srv.hole(x=30, y=0, diameter=11)
+    srv.save_document(str(plate))
+
+    def props():
+        out = srv.set_properties(str(plate), json.dumps({"Part Number": "AU-001", "Description": "Audit plate",
+                                                         "Heat Treatment": "none"}))
+        doc = srv.inv._open_model(str(plate))
+        dt = doc.PropertySets.Item("Design Tracking Properties")
+        assert dt.Item("Part Number").Value == "AU-001" and dt.Item("Description").Value == "Audit plate"
+        return out
+    check("set_properties", props)
+
+    srv.create_drawing()
+    srv.add_base_view(str(plate), 100, 200, 1)
+    srv.add_projected_view("VIEW1", 100, 120)
+
+    def material():
+        shown = json.loads(srv.set_title_block('{"TITLE": "Audit plate"}'))["title_block"]["MATERIAL"]
+        assert shown == "NONE", f"a Generic part should state NONE, shows {shown!r}"
+        return shown
+    check("MATERIAL stated as NONE for a Generic part", material)
+
+    def move():
+        out = srv.move_view("VIEW1", 150, 210, 1.5)
+        v = next(v for v in json.loads(srv.list_views())["views"] if v["name"] == "VIEW1")
+        assert v["center_mm"] == [150.0, 210.0] and v["scale"] == 1.5, v
+        try:
+            srv.move_view("VIEW1", 400, 280)
+        except ValueError as exc:
+            v = next(v for v in json.loads(srv.list_views())["views"] if v["name"] == "VIEW1")
+            assert v["center_mm"] == [150.0, 210.0], v
+            return f"{out} | refused: {exc}"
+        raise AssertionError("a view moved past the border was accepted")
+    check("move_view (and refusal)", move)
+
+    def notes():
+        srv.add_hole_note("VIEW1", 30, 5.5, 60, 45, count=2)
+        found = json.loads(srv.list_notes())
+        assert found and found[0]["text"].startswith("2x"), found
+        srv.delete_note("1")
+        assert json.loads(srv.list_notes()) == [], srv.list_notes()
+        return found[0]["text"]
+    check("add_hole_note count + list_notes + delete_note", notes)
+
+    def delete():
+        out = srv.delete_view("VIEW2")
+        names = [v["name"] for v in json.loads(srv.list_views())["views"]]
+        assert names == ["VIEW1"], names
+        return out
+    check("delete_view", delete)
+    srv.inv.active_document().Close(True)
     close_audit_files()
 
 
@@ -886,7 +961,8 @@ def _equal(actual, expected):
 
 
 def main():
-    for group in (solid_block, revolves, extrude_variants, sheet_metal, drawing, assembly, server_only):
+    for group in (solid_block, revolves, extrude_variants, sheet_metal, drawing, assembly, drawing_edits,
+                  server_only):
         print(f"\n{group.__name__}: {group.__doc__}", flush=True)
         try:
             group()

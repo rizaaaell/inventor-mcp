@@ -364,6 +364,27 @@ Verified while building the phase 3 tools (2027.1):
   orientation is read from a throwaway view (`view.Camera`), which takes the next view
   name, so the new view is renamed after it.
 
+## Title block and drawing edits (phase 6 follow-up)
+
+- The Arjuna MATERIAL field read the model's Material iProperty, which is read-only (it
+  follows `ActiveMaterial`) and empty for an assembly, so it could not say NONE or a
+  statement. `tools/prepare_arjuna_templates.py` turns it into a `<Prompt>` in the migrated
+  templates (the portrait templates have no MATERIAL field); the wrapper fills it.
+- A title block text box can be re-justified inside `TitleBlockDefinition.Edit()`:
+  `HorizontalJustification` 19969 (centre), `VerticalJustification` 25601 (middle), and
+  `Origin` then is the text centre. The cell comes from the sketch lines around the label.
+- `DrawingView.Center` and `Scale` are settable; `ScaleFromBase = False` first for a
+  projected view. `DrawingView.Delete()` takes the views made from it along.
+- `HoleThreadNote.Delete()` and `ChamferNote.Delete()` remove notes; a literal "2x " in
+  front of `FormattedHoleThreadNote` counts holes made as separate features.
+- `AllReferencedDocuments` of an assembly lists every part file once; their
+  `ActiveMaterial.DisplayName` ("Generic" when unassigned, "Steel, Mild" for Content Center
+  fasteners) gives the materials for the MATERIAL statement.
+- `Face.Evaluator.GetNormalAtPoint([x, y, z], [0, 0, 0])` returns `(points, normals)`, and
+  the normal points out of the solid: what `auto_explode` uses to tell which side of a
+  seat face a component sits on. The middle of the parent part is not enough: a washer on
+  the back of a flange disk sits below the middle of the flange when the hub is long.
+
 ## Closing documents
 
 - `Document.Close` on a part an open assembly or drawing still uses shows an

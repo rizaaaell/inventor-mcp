@@ -731,12 +731,13 @@ def add_dimension(view: str, kind: str, x1: float, y1: float,
 
 @mcp.tool()
 def add_hole_note(view: str, x: float, y: float, text_x: float, text_y: float,
-                  second_line: str = "") -> str:
+                  second_line: str = "", count: int = 0) -> str:
     """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for patterned holes.
-    The quantity prefix comes from the drawing profile. second_line goes under it, e.g.
-    "EQ SP ON PCD Ø90" to give the bolt circle in the same note. Points are model mm from
-    the view center."""
-    return inv.add_hole_note(view, x, y, text_x, text_y, second_line)
+    The quantity prefix comes from the drawing profile and only counts holes of one
+    patterned feature; count > 0 writes "<count>x" for holes made as separate features.
+    second_line goes under it, e.g. "EQ SP ON PCD Ø90" to give the bolt circle in the same
+    note. Points are model mm from the view center."""
+    return inv.add_hole_note(view, x, y, text_x, text_y, second_line, count)
 
 
 @mcp.tool()
@@ -843,8 +844,13 @@ def set_title_block(fields: str) -> str:
 
     Each field goes where the title block reads it: a prompt on the sheet, an iProperty of
     the drawing, or an iProperty of the model in the first view (then the model changes
-    and save_document saves it too). MATERIAL sets the part's material from the active
-    material library. An unknown name lists the fields the title block has.
+    and save_document saves it too). An unknown name lists the fields the title block has.
+
+    MATERIAL is always stated. The first view fills it automatically: a part's material,
+    the one material all parts of an assembly share, the profile's statement for mixed
+    materials ("VARIOUS, SEE PART DRAWINGS"), or "NONE" when nothing is assigned (Generic).
+    Passing a library material name also gives a part that material; "NONE" or any other
+    statement is printed as given; "auto" recomputes it.
 
     Args:
         fields: JSON object. Arjuna template: {"TITLE": "Flens Kopling", "PART NUMBER": "KF-001",
@@ -1091,6 +1097,67 @@ def add_explode_trails(view: str) -> str:
     """Thin chain trail lines in a drawing view of an exploded copy, from each moved
     component back to its assembled position; trails on one line are merged."""
     return inv.add_explode_trails(view)
+
+
+@mcp.tool()
+def move_view(view: str, x: float = 0, y: float = 0, scale: float = 0) -> str:
+    """Move a drawing view's centre to (x, y) sheet mm and/or change its scale (0 keeps it).
+    Views projected from it follow. A position that leaves the border or overlaps the title
+    block, another view or the parts list is undone and reported."""
+    return inv.move_view(view, x, y, scale)
+
+
+@mcp.tool()
+def delete_view(view: str) -> str:
+    """Delete a drawing view; views projected, cut or detailed from it go with it."""
+    return inv.delete_view(view)
+
+
+@mcp.tool()
+def list_notes() -> str:
+    """Hole and chamfer notes on the active sheet: index, kind, text, centre (sheet mm)."""
+    return json.dumps(inv.list_notes(), indent=1, ensure_ascii=False)
+
+
+@mcp.tool()
+def delete_note(indices: str) -> str:
+    """Delete hole or chamfer notes by index from list_notes (comma-separated), e.g. to
+    place one again with other text or position."""
+    return inv.delete_note(indices)
+
+
+@mcp.tool()
+def set_properties(model_path: str, fields: str) -> str:
+    """Write iProperties of a part or assembly file and save it.
+
+    Part Number and Description are what BOMs and parts lists show (Part Number defaults to
+    the file name). Known names: Part Number, Description, Stock Number, Vendor, Project,
+    Designer, Engineer, Checked By, Revision Number, Title, Subject, Author, Comments; MATERIAL
+    sets a part's material from the active library; any other name becomes a custom property.
+
+    Args:
+        model_path: .ipt or .iam file.
+        fields: JSON object, e.g. {"Part Number": "KF-001", "Description": "Coupling flange"}.
+    """
+    return inv.set_properties(model_path, json.loads(fields))
+
+
+@mcp.tool()
+def auto_explode(spacing: float = 20, axis: str = "Z") -> str:
+    """Explode the active exploded copy (from create_exploded_copy) along one assembly axis.
+
+    Uses the constraint log of the source assembly (written by save_document): each
+    component moves off the face it was inserted or mated onto, far enough to clear its
+    parent plus spacing, and moves add up along the chain (washer, then bolt beyond it).
+    Pattern instances follow their original. Works for parts stacked along one axis, such
+    as shafts, flanges and bolt sets; move anything else with explode_components. Run
+    save_document afterwards.
+
+    Args:
+        spacing: gap in mm between a component and the one it sat on.
+        axis: X, Y or Z of the assembly.
+    """
+    return inv.auto_explode(spacing, axis)
 
 
 def main():

@@ -5,6 +5,11 @@ description: Build Inventor assemblies (.iam) through the inventor-mcp server - 
 
 # Inventor assemblies through MCP
 
+What the team usually needs from an assembly is its **exploded drawing** (exploded iso
+view, parts list, balloons; see the `inventor-drawing` skill). Build the assembly with
+constraints anyway: `auto_explode` reads the constraint log to explode it, and DOF, BOM and
+interference checks catch modelling mistakes before they reach the drawing.
+
 ## Workflow
 
 ```text
@@ -110,11 +115,30 @@ BOM.
   - `real overlap`: a genuine clash. Fix the constraint or the part.
   Parts that only touch are not listed.
 
-## Exploded copies (for drawings)
+## Part numbers and descriptions
 
-`create_exploded_copy(assembly, new_path)` makes a constraint-free copy;
-`explode_components(names, dx, dy, dz)` moves components; `save_document("")`. Details and
-the drawing side are in the `inventor-drawing` skill.
+BOMs and parts lists show each file's Part Number (the file name until set) and
+Description. Set them once per part file:
+`set_properties("C:/.../Flens.ipt", '{"Part Number": "KF-001", "Description": "Coupling flange"}')`.
+Content Center parts bring their own ("DIN 933 - M10 x 60", "Hex-Head Bolt").
+
+## Exploding
+
+```text
+create_exploded_copy("C:/.../Kopling.iam", "C:/.../Kopling_exploded.iam")   # free copy, original untouched
+auto_explode(spacing=20, axis="Z")
+save_document("")
+```
+
+- `auto_explode` reads `<source>.constraints.json`: each component moves off the outward
+  side of the face it was inserted or mated onto, clear of its parent plus `spacing`, and
+  the moves add up along the chain. The grounded component stays; pattern instances follow
+  their original. Its result lists every move.
+- Use the axis the parts were stacked along. Components assembled along another axis, or
+  placed without an insert or mate, stay put; move them with
+  `explode_components("name:1, name:2", dx, dy, dz)` (mm, assembly coordinates), outward
+  in assembly order.
+- The drawing side (view, trails, parts list, balloons) is in the `inventor-drawing` skill.
 
 ## Pitfalls
 
@@ -147,6 +171,7 @@ nut-side washer on Flens:2 "circle:45,0,20,5.5" (Flens:2 is flipped: hole (x, y)
 nut: insert washer "circle:2,0,0,5.25" -> nut "circle:0,0,0,7.65"; flush Flens:2 XZ / nut XY
 pattern_component("<washer>, <bolt>, <washer2>, <nut>", "Flens:1", "axis:Z", 4)
 get_dof(); get_bom("parts"); analyze_interference(); save_document(...)
+create_exploded_copy(...); auto_explode(20, "Z"); save_document("")   # then the exploded drawing
 ```
 
 Full script: `experiments/assembly_coupling_tools.py`. API details:

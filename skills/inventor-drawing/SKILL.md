@@ -56,10 +56,11 @@ Third angle: a projected view placed **above** the parent is the top view, to th
    features you want cut. A section through two opposite bolt holes shows them cut.
 4. **Detail view** for small features (grooves, small chamfers) at 2:1 or more.
 5. **Isometric** in a free corner at a smaller scale, as Arjuna drawings have one.
-6. Scale: standard ratios only (1:1, 1:2, 1:5, 2:1). Pick it before placing: there is no
-   tool to move, rescale or delete a view, so a bad choice means a new drawing. Small parts
-   (under ~100 mm) on A3 read better at 2:1. Leave 25-35 mm around each view for
-   dimensions. `add_base_view` refuses a view that leaves the border or overlaps the
+6. Scale: standard ratios only (1:1, 1:2, 1:5, 2:1). Small parts (under ~100 mm) on A3
+   read better at 2:1. Leave 25-35 mm around each view for dimensions. Fix a view later
+   with `move_view(view, x, y, scale)` (projected views follow; a spot outside the border
+   or on something else is refused) or `delete_view(view)` (its child views go too).
+   Move views before dimensioning; annotations do not follow a rescale well. `add_base_view` refuses a view that leaves the border or overlaps the
    title block, another view or the parts list, and says where it would sit; move it or
    change the scale.
 7. View names come back in tool results (`VIEW1`, `A`, ...). A rejected view still uses up
@@ -93,10 +94,10 @@ each circle, in chain line.
    Points exactly at the centres hit no curve and fail with a COM error.
 7. Holes: `add_hole_note(view, x, y, tx, ty, second_line="EQ SP ON PCD Ø90")` gives
    "4x Ø11 THRU" with the bolt circle under it; prefer that to a separate PCD dimension.
-   The count only appears when the holes are **one patterned feature**: a `hole()` plus
-   `circular_pattern` (two holes at x = ±30 are a pattern of 2 over 360° about Z). Two
-   separate `hole()` calls give "Ø11 THRU" without "2x", and a note cannot be edited
-   afterwards, so model repeated holes as a pattern.
+   The count only appears by itself when the holes are **one patterned feature**: a
+   `hole()` plus `circular_pattern` (two holes at x = ±30 are a pattern of 2 over 360°
+   about Z). For holes made as separate features pass `count=2`. A wrong note:
+   `list_notes()`, `delete_note("i")`, place it again.
 8. Chamfers: `add_chamfer_note` on a view where the chamfer is a slanted line,
    `prefix="2x "` for equal chamfers.
 
@@ -116,13 +117,22 @@ each circle, in chain line.
 ### Title block
 
 `set_title_block('{"TITLE": "...", "PART NUMBER": "...", "ENGINEER": "...",
-"REVISION NUMBER": "1", "MATERIAL": "Aluminum 6061"}')`. Unknown names make it list the
-fields the block has. MATERIAL sets the part's material, and some fields live in the
-model, so `save_document` on the drawing saves the model too. In the Arjuna template
-TITLE, ENGINEER, CHECKED BY, REVISION NUMBER and MATERIAL are model iProperties, while
-PART NUMBER and SURFACE FINISH are prompts on the sheet only: the part's own Part Number
-(used by BOMs and parts lists) stays the file name. The tool result's `model_changed`
-lists what went to the model.
+"REVISION NUMBER": "1"}')`. Unknown names make it list the fields the block has. Some
+fields live in the model, so `save_document` on the drawing saves the model too: in the
+Arjuna template TITLE, ENGINEER, CHECKED BY and REVISION NUMBER are model iProperties,
+while PART NUMBER, SURFACE FINISH and MATERIAL are prompts on the sheet. The tool result's
+`model_changed` lists what went to the model.
+
+**MATERIAL is always stated.** The first view fills it: the part's material; for an
+assembly the one material all its parts share, or the statement "VARIOUS, SEE PART
+DRAWINGS" when they differ; "NONE" when nothing is assigned (Generic). Pass a library
+material name ("Aluminum 6061") to give a part that material and print it, any other text
+("NONE", "AS PER PARTS LIST") to print just that, or "auto" to work it out again after
+changing materials. The statements are profile keys `material_mixed` / `material_none`.
+
+The parts list prints each part's Part Number and Description iProperties (Part Number is
+the file name until set). Fill them before drawing:
+`set_properties("C:/.../Flens.ipt", '{"Part Number": "KF-001", "Description": "Coupling flange"}')`.
 
 ## Verify, every time
 
@@ -136,41 +146,51 @@ lists what went to the model.
 5. For a close look at the PDF: `powershell -File tools\pdf2png.ps1 -Pdf <pdf> -OutDir <dir>`
    renders pages with Windows' own PDF engine.
 
-## Assembly drawings
+## Assembly drawings: exploded view by default
 
-1. Base view of the `.iam` (`design_view=` / `positional=` pick a representation).
-2. Section through the main axis. Content Center fasteners stay unhatched by
-   themselves; pass shafts cut along their axis in `no_hatch="Poros:1, Poros:2"`.
-3. `add_parts_list(view)` **before** balloons. With no x, y it stacks on the title block
-   against the right border (ITEM, QTY, PART NUMBER, DESCRIPTION, heading at the bottom).
-4. `add_balloons(view)`: one balloon per parts-list item visible in that view, in rows
-   above and below the view, beside the view label, leaders not crossing, each pointing
-   at an edge no other component shares. Check the PNG; rerun on another view if an
-   item is not visible in the first.
-5. DESCRIPTION comes from the parts' Description iProperty; empty for parts that have none.
+An assembly drawing is an **exploded isometric view with a parts list and balloons**,
+as in the Arjuna assembly drawings. Draw the assembled state (with a section) only when
+the user asks for it, e.g. to show fits.
 
-### Exploded views
-
-Inventor 2027's presentation API cannot add tweaks or snapshot views, so an exploded
-drawing comes from a free copy of the assembly:
+Inventor 2027's presentation API cannot add tweaks or snapshot views, so the exploded
+view comes from a free copy of the assembly:
 
 ```text
+set_properties(each part, '{"Part Number": "...", "Description": "..."}')   # what the parts list prints
 create_exploded_copy("C:/.../Kopling.iam", "C:/.../Kopling_exploded.iam")
-explode_components("Flens:2", dz=-40)               # mm, assembly coordinates
-explode_components("Bolt:1, Bolt:2", dz=120)        # outward, in assembly order
+auto_explode(spacing=20, axis="Z")       # from the source's constraint log
 save_document("")
 create_drawing()
 add_base_view("C:/.../Kopling_exploded.iam", 160, 165, 0.5, "iso_top_right", spin=30)
-add_explode_trails("VIEW1")                         # chain lines back to the assembled spot
-add_parts_list("VIEW1"); add_balloons("VIEW1")
+add_explode_trails("VIEW1")              # chain lines back to the assembled position
+add_parts_list("VIEW1")                  # before balloons, so item numbers match
+add_balloons("VIEW1")
+set_title_block(...); list_views(); export_sheet_png(...); save_document(...); export_pdf(...)
 ```
 
-- Keep one part fixed (the grounded one). Move the rest outward along the assembly axis
-  in the order they were assembled: washer, then bolt beyond it; flange, then its washer,
-  then the nut further still. Leave clear gaps; a bolt must not pass through its washer.
-- `spin=30` (about the flange axis) stops bolts at 0/90/180/270 degrees from hiding each
-  other in pairs, which happens in every standard iso orientation.
+- `auto_explode` needs the source assembly built with `add_constraint` and saved with
+  `save_document` (that writes `<name>.constraints.json`). Each part moves off the face it
+  was inserted or mated onto, clear of it plus `spacing`, in assembly order: washer, then
+  the bolt beyond it; flange, its washer, the nut further still; a shaft out of its hub.
+  The grounded part stays. It handles stacks along one axis; move anything else (radial
+  parts, a second axis) with `explode_components(names, dx, dy, dz)` on the same copy.
+- Pick the axis the parts were assembled along, and a scale that fits the longer exploded
+  length (often half the assembled scale).
+- `spin=30` (about that axis) stops bolts at 0/90/180/270 degrees from hiding each other
+  in pairs, which happens in every standard iso orientation.
+- `add_parts_list` with no x, y stacks on the title block against the right border
+  (ITEM, QTY, PART NUMBER, DESCRIPTION, heading at the bottom).
+- `add_balloons(view)`: one balloon per parts-list item visible in the view, rows above
+  and below it, leaders not crossing, each on an edge no other component shares. Check
+  the PNG.
 - The copy does not follow later changes to the original; make it again.
+
+### Assembled section (when asked)
+
+Base view of the `.iam` (`design_view=` / `positional=` pick a representation), then a
+section through the main axis. Content Center fasteners stay unhatched by themselves;
+pass shafts cut along their axis in `no_hatch="Poros:1, Poros:2"`. Parts list and balloons
+as above.
 
 ## Pitfalls
 

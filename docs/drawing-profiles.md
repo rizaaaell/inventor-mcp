@@ -31,6 +31,9 @@ standard; no code change or server restart is needed.
 | `parts_list.heading` | `bottom` (ITEM, QTY, PART NUMBER, DESCRIPTION headings under the rows and PARTS LIST below them, as in the Arjuna assembly drawings), `top` or `none` |
 | `parts_list.widths` | column widths in mm by heading, e.g. `{"ITEM": 15, "QTY": 12}` |
 | `balloon_arrowhead` | leader end of balloons: `filled`, `closed`, `open`, `dot` or `none`; empty keeps the balloon style's |
+| `material_none` | MATERIAL text when the part (or every part of an assembly) has no material assigned (Generic), e.g. `NONE` |
+| `material_mixed` | MATERIAL text when an assembly's parts have different materials, e.g. `VARIOUS, SEE PART DRAWINGS` |
+| `title_block_defaults.MATERIAL` | `auto` fills MATERIAL on the first view: the material, the shared one, or one of the two statements above |
 
 Label texts use Inventor's tokens: `<DrawingViewName/>`, `<DrawingViewScale/>`,
 `<DrawingViewSheetName/>`, `<DrawingViewSheetIndex/>`, `<DrawingViewSheetZone/>`

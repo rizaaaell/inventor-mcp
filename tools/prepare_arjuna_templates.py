@@ -5,7 +5,8 @@ Run from the repo root:  python -X utf8 -u tools/prepare_arjuna_templates.py
 For every .idw in references/templates/ it writes references/templates/2027/<name>:
 a copy opened and saved once in this Inventor (older templates make Documents.Add
 fail), with a DOCUMENT TYPE prompt added under the "DOCUMENT TYPE:" label when the
-title block has the label but no field. The originals are not touched.
+title block has the label but no field and centred under it, and MATERIAL as a prompt.
+The originals are not touched.
 
 The Arjuna style exports (*.styxml) still have to be imported by hand afterwards,
 see docs/drawing-profiles.md; the Inventor API has no import call for them. A template
@@ -70,6 +71,64 @@ def shrink_long_fields(doc, size_cm: float = 0.2) -> str:
     finally:
         definition.ExitEdit(True)
     return f"font {size_cm:g} cm on {', '.join(changed)}" if changed else "field fonts already small"
+
+
+def _cell(sketch, x: float, y: float):
+    """(left, right, bottom, top) in cm of the title block cell around (x, y)."""
+    xs, ys = [], []
+    for i in range(1, sketch.SketchLines.Count + 1):
+        line = sketch.SketchLines.Item(i)
+        a, b = line.StartSketchPoint.Geometry, line.EndSketchPoint.Geometry
+        if abs(a.X - b.X) < 1e-4 and min(a.Y, b.Y) <= y <= max(a.Y, b.Y):
+            xs.append(a.X)
+        if abs(a.Y - b.Y) < 1e-4 and min(a.X, b.X) <= x <= max(a.X, b.X):
+            ys.append(a.Y)
+    return (max(v for v in xs if v < x), min(v for v in xs if v > x),
+            max(v for v in ys if v < y), min(v for v in ys if v > y))
+
+
+def center_document_type(doc) -> str:
+    """Centre the DOCUMENT TYPE value in the space under its label, like REV and MATERIAL."""
+    definition = doc.ActiveSheet.TitleBlock.Definition
+    sketch = definition.Edit()
+    try:
+        boxes = [sketch.TextBoxes.Item(i) for i in range(1, sketch.TextBoxes.Count + 1)]
+        value = next((t for t in boxes if "<Prompt" in t.FormattedText and "DOCUMENT TYPE" in t.Text.upper()), None)
+        label = next((t for t in boxes if t.Text.strip().upper() == "DOCUMENT TYPE:"), None)
+        if value is None or label is None:
+            return "no DOCUMENT TYPE field to centre"
+        left, right, bottom, _ = _cell(sketch, label.Origin.X + 0.5, label.Origin.Y - 0.3)
+        label_bottom = label.Origin.Y - label.Height  # the label is top-left aligned
+        tg = doc.Parent.TransientGeometry
+        value.HorizontalJustification = 19969  # kAlignTextCenter
+        value.VerticalJustification = 25601  # kAlignTextMiddle
+        value.Origin = tg.CreatePoint2d((left + right) / 2, (bottom + label_bottom) / 2)
+    finally:
+        definition.ExitEdit(True)
+    return "DOCUMENT TYPE centred"
+
+
+def material_prompt(doc) -> str:
+    """Turn the MATERIAL field into a prompt.
+
+    It read the model's Material iProperty, which is read-only and has nothing to say for an
+    assembly; as a prompt the tools can write a material, NONE, or a statement for mixed
+    materials.
+    """
+    definition = doc.ActiveSheet.TitleBlock.Definition
+    sketch = definition.Edit()
+    try:
+        for i in range(1, sketch.TextBoxes.Count + 1):
+            t = sketch.TextBoxes.Item(i)
+            if "<Property" in t.FormattedText and ">MATERIAL<" in t.FormattedText:
+                t.FormattedText = re.sub(r"<Property [^>]*>MATERIAL</Property>", "<Prompt>MATERIAL</Prompt>",
+                                         t.FormattedText)
+                return "MATERIAL is a prompt"
+            if "<Prompt" in t.FormattedText and "MATERIAL" in t.Text.upper():
+                return "MATERIAL already a prompt"
+    finally:
+        definition.ExitEdit(True)
+    return "no MATERIAL field"
 
 
 def _find(collection, name):
@@ -142,6 +201,8 @@ def main():
             doc = app.Documents.Open(str(dst), False)
             note = ("migrated, " if fresh else "kept, ") + add_document_type_field(doc)
             note += ", " + shrink_long_fields(doc)
+            note += ", " + center_document_type(doc)
+            note += ", " + material_prompt(doc)
             note += ", " + arjuna_standard(doc)
             doc.Save()
             print(f"OK   {src.name}: {note}")

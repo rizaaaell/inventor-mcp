@@ -22,7 +22,8 @@
   },
   "title_block_defaults": {
     "DOCUMENT TYPE": "ENGINEERING DRAWING",
-    "APPROVED BY": "Rachmadi Norcahyo"
+    "APPROVED BY": "Rachmadi Norcahyo",
+    "MATERIAL": "auto"
   },
   "general_tolerances": {
     ".X": "0,2",
@@ -30,5 +31,7 @@
     ".XXX": "0,05",
     "ANGULAR": "1°"
   },
-  "centerline_line_type": "chain"
+  "centerline_line_type": "chain",
+  "material_none": "NONE",
+  "material_mixed": "VARIOUS, SEE PART DRAWINGS"
 }
