@@ -2245,11 +2245,18 @@ class InventorConnection:
         elif kind in ("horizontal", "vertical", "aligned"):
             if x2 is None or y2 is None:
                 raise ValueError(f"A {kind} dimension needs x2 and y2")
-            c1, m1 = self._nearest_curve(v, x1, y1)
-            c2, m2 = self._nearest_curve(v, x2, y2)
+            c1, m1 = self._nearest_curve_prefer_circle(v, x1, y1)
+            c2, m2 = self._nearest_curve_prefer_circle(v, x2, y2)
             miss = max(m1, m2)
             dim_type = {"aligned": 60161, "horizontal": 60162, "vertical": 60163}[kind]
-            dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1), sheet.CreateGeometryIntent(c2), dim_type)
+
+            def intent(curve):
+                # Without the center intent a circle can be measured at a point of its
+                # rim, e.g. 50,04 instead of the 50 between two hole centers.
+                if curve.CurveType == 5124:  # kCircleCurve
+                    return sheet.CreateGeometryIntent(curve, 57860)
+                return sheet.CreateGeometryIntent(curve)
+            dim = dims.AddLinear(text, intent(c1), intent(c2), dim_type)
         else:
             raise ValueError("kind must be diameter, radius, pcd, angle, horizontal, vertical or aligned")
         if kind != "angle":
@@ -2262,6 +2269,18 @@ class InventorConnection:
         picked = "curves" if kind in ("horizontal", "vertical", "aligned", "angle") else "curve"
         return (f"{kind.capitalize()} dimension {dim.Text.Text} in {v.Name} "
                 f"(picked {picked} within {miss:.1f} mm); text overlaps: {clashes or 'none'}")
+
+    def _nearest_curve_prefer_circle(self, view, x: float, y: float):
+        """A point on a hole's rim can touch another curve too (a tangent edge, a line
+        through the circle's top); the circle wins when it is as close."""
+        curve, miss = self._nearest_curve(view, x, y)
+        try:
+            circle, circle_miss = self._nearest_curve(view, x, y, circular=True)
+        except ValueError:
+            return curve, miss
+        if circle.CurveType == 5124 and circle_miss <= miss + 0.2:
+            return circle, circle_miss
+        return curve, miss
 
     @staticmethod
     def _fit_precision(dim, most: int = 2) -> None:
@@ -2706,19 +2725,41 @@ class InventorConnection:
             if strict:
                 raise ValueError("MATERIAL can only be set on a part")
             return False
-        lib = self.app.ActiveMaterialLibrary.MaterialAssets
-        names = [lib.Item(i).DisplayName for i in range(1, lib.Count + 1)]
-        match = next((n for n in names if n.lower() == name.lower()), None)
-        if match is None:
+        found, names = None, []
+        for lib in self._material_libraries():
+            for i in range(1, lib.Count + 1):
+                asset = lib.Item(i)
+                names.append(asset.DisplayName)
+                if found is None and asset.DisplayName.lower() == name.lower():
+                    found = asset
+        if found is None:
             if not strict:
                 return False
             close = [n for n in names if name.lower().split()[0] in n.lower()][:8]
-            raise ValueError(f"No material {name!r} in the active library. Close: {close}")
+            raise ValueError(f"No material {name!r} in the material libraries. Close: {close}")
         assets = model.MaterialAssets
         local = next((assets.Item(i) for i in range(1, assets.Count + 1)
-                      if assets.Item(i).DisplayName == match), None)
-        model.ActiveMaterial = local or lib.Item(match).CopyTo(model)
+                      if assets.Item(i).DisplayName == found.DisplayName), None)
+        model.ActiveMaterial = local or found.CopyTo(model)
         return True
+
+    def _material_libraries(self):
+        """Material asset collections, the active library first. ActiveMaterialLibrary
+        raises when the project names none, e.g. in a freshly started Inventor."""
+        out = []
+        try:
+            out.append(self.app.ActiveMaterialLibrary.MaterialAssets)
+        except Exception:
+            pass
+        libs = self.app.AssetLibraries
+        for i in range(1, libs.Count + 1):
+            try:
+                assets = libs.Item(i).MaterialAssets
+                if assets.Count:
+                    out.append(assets)
+            except Exception:
+                continue
+        return out
 
     def set_title_block(self, fields: dict) -> str:
         """Fill title block fields by the names the title block shows, e.g. TITLE, PART NUMBER.
