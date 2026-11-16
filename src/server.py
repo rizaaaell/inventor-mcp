@@ -711,7 +711,7 @@ def add_centerlines(view: str) -> str:
 def add_dimension(view: str, kind: str, x1: float, y1: float,
                   x2: float | None = None, y2: float | None = None,
                   text_x: float = 0, text_y: float = 0, prefix: str = "",
-                  vertex_x: float = 0, vertex_y: float = 0) -> str:
+                  vertex_x: float = 0, vertex_y: float = 0, suffix: str = "") -> str:
     """Add one dimension to a view. Points are model mm from the view center; each picks
     the nearest visible curve.
 
@@ -722,13 +722,20 @@ def add_dimension(view: str, kind: str, x1: float, y1: float,
               aligned (distance between the curves nearest x1, y1 and x2, y2); or angle
               (between the centers of the circles nearest x1, y1 and x2, y2, around the
               center of the circle nearest vertex_x, vertex_y; e.g. bolt hole spacing).
+              Without x2, y2 the angle runs from the horizontal axis through the vertex
+              (its right side, 0°) to the hole at x1, y1: the orientation of holes that are off the axes.
         x1, y1, x2, y2: points on or near the curves to dimension.
         text_x, text_y: where the dimension text goes, same frame. Keep it outside the part.
         prefix: text before the value, "Ø" for a diameter dimensioned in a side or section
                 view (the usual place for diameters of turned parts).
         vertex_x, vertex_y: for kind "angle", a point on the circle at the vertex (e.g. the bore).
+        suffix: text after the value, "
+" starts a new line. A hole pattern is one diameter
+                dimension: prefix "4x ", suffix " THRU
+ON PCD 76, EQ SP".
     """
-    return inv.add_dimension(view, kind, x1, y1, x2, y2, text_x, text_y, prefix, vertex_x, vertex_y)
+    return inv.add_dimension(view, kind, x1, y1, x2, y2, text_x, text_y, prefix, vertex_x, vertex_y,
+                             suffix)
 
 
 @mcp.tool()
@@ -798,7 +805,8 @@ def set_tolerance(index: int, kind: str, upper: float = 0, lower: float = 0, fit
 @mcp.tool()
 def add_gdt(view: str, x: float, y: float, text_x: float, text_y: float,
             characteristic: str, tolerance: float, datums: str = "",
-            diameter_zone: bool = False, attach: bool = True, leader: bool = True) -> str:
+            diameter_zone: bool = False, attach: bool = True, leader: bool = True,
+            dimension: int = 0) -> str:
     """Feature control frame, with a leader to the curve nearest (x, y).
 
     Args:
@@ -812,20 +820,26 @@ def add_gdt(view: str, x: float, y: float, text_x: float, text_y: float,
         datums: datum letters in order of precedence, e.g. "A,B".
         diameter_zone: True puts Ø before the value (cylindrical zone, e.g. for position).
         attach: False ends the leader exactly at (x, y), e.g. on an extension line.
-        leader: False places the bare frame at (text_x, text_y), e.g. right under a hole note.
+        leader: False places the bare frame at (text_x, text_y).
+        dimension: index from list_dimensions; the frame goes right under that dimension's
+                   text with no leader (x, y, text_x, text_y ignored). Use it for a size
+                   feature: position under the hole note, runout under a diameter.
     """
     return inv.add_gdt(view, x, y, text_x, text_y, characteristic, tolerance, datums,
-                       diameter_zone, attach, leader)
+                       diameter_zone, attach, leader, dimension)
 
 
 @mcp.tool()
 def add_datum(view: str, x: float, y: float, label: str, text_x: float, text_y: float,
-              attach: bool = True) -> str:
+              attach: bool = True, dimension: int = 0) -> str:
     """Datum feature symbol: the letter in a box at (text_x, text_y), with a filled triangle
     on the curve nearest (x, y). attach False puts the triangle exactly at (x, y), e.g. on
     the extension line of a diameter dimension to make the axis the datum.
+    dimension: index from list_dimensions; the triangle goes on the outer end of that size
+    dimension's text shoulder, box below it (x, y, text_x, text_y ignored). This is how an
+    axis (bore, shaft seat) becomes a datum.
     Points are model mm from the view center."""
-    return inv.add_datum(view, x, y, label, text_x, text_y, attach)
+    return inv.add_datum(view, x, y, label, text_x, text_y, attach, dimension)
 
 
 @mcp.tool()

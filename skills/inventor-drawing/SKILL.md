@@ -50,7 +50,10 @@ Third angle: a projected view placed **above** the parent is the top view, to th
 1. **Front view = the most informative view.** `orientation="front"` looks along the
    model's -Z axis. A turned part or flange modelled about Z shows its circular face.
 2. **Fewest views that define the part.** Usually front + one projected or section view.
-   Add a top view with `style="hidden"` only when hidden lines explain holes or bores.
+   A plain (not sectioned) orthographic view of a part with bores or holes gets
+   `style="hidden"`, so the bore shows as dashed lines even when a section also shows it
+   (a hollow shaft's side view, a flange's edge view). Section views stay without hidden
+   lines (ISO 128); the iso view stays `visible`.
 3. **Section** when there are internal features (bores, counterbores, through holes).
    Draw the section line across the whole part (extend past the outline), through the
    features you want cut. A section through two opposite bolt holes shows them cut.
@@ -82,8 +85,7 @@ each circle, in chain line.
    - turned parts: diameters as `vertical` (or `horizontal`) dimensions with `prefix="Ø"`
      in the section or side view, stacked outside the outline, smallest nearest;
    - `diameter` / `radius` for circles seen as circles;
-   - `pcd` for a bolt circle (needs `add_centerlines` first), `angle` for hole spacing
-     (vertex on the bore circle).
+   - `angle` for hole spacing (vertex on the bore circle).
 4. Text positions go **outside the part**. Never dimension to a hidden line. The text
    lands a few mm from where you ask (the dimension line snaps); check the result.
 5. Section and detail labels ("A-A ( 1 : 1 )") sit **above** their view. Keep dimensions
@@ -95,16 +97,22 @@ each circle, in chain line.
 7. Distance between hole centres: use `horizontal` / `vertical` with points **on the two
    circles** (e.g. their tops, (-30, 5.5) and (30, 5.5)); it measures centre to centre.
    Points exactly at the centres hit no curve and fail with a COM error.
-8. Holes: `add_hole_note(view, x, y, tx, ty, second_line="EQ SP ON PCD Ø90")` gives
-   "4x Ø11 THRU" with the bolt circle under it; prefer that to a separate PCD dimension.
-   The count only appears by itself when the holes are **one patterned feature**: a
-   `hole()` plus `circular_pattern` (two holes at x = ±30 are a pattern of 2 over 360°
-   about Z). For holes made as separate features pass `count=2`. A wrong note:
-   `list_notes()`, `delete_note("i")`, place it again.
-   Equal holes on a circle get a pitch circle from `add_centerlines` even when they were
-   cut in one sketch; then `add_dimension(view, "pcd", ..., prefix="PCD ")`. A diameter
-   leader lands where the line from its text to the centre meets the circle, so put the
-   text on an angle between two holes.
+8. Holes on a bolt circle: **one note, no separate PCD dimension.**
+   `add_dimension(view, "diameter", <point on one hole, outer side>, tx, ty, prefix="4x ",
+   suffix=" THRU
+ON PCD 76, EQ SP")` reads "4x Ø8 THRU / ON PCD 76, EQ SP"; it works for
+   holes cut in one sketch as well as for patterned ones. `add_hole_note(...,
+   second_line="ON PCD 76, EQ SP")` does the same for `hole()` features (count by itself
+   only for one patterned feature, else `count=4`); a frame under a hole note is placed by
+   hand with `leader=False`, so prefer the dimension form. The pitch circle centerline from
+   `add_centerlines` stays on the view. A wrong note: `list_notes()`, `delete_note("i")`.
+   A diameter leader lands where the line from its text to the centre meets the circle:
+   point it at a hole, text outside the part.
+   **Orientation:** holes that do not sit on the centerlines (e.g. at 45°) get the angle
+   from an axis: `add_dimension(view, "angle", hx, hy, vertex_x=0, vertex_y=0, text_x,
+   text_y)` (no x2/y2) measures from the horizontal centerline (right side, 0°) to that hole; pick a hole in
+   the upper right quadrant so the angle reads small (45°, not 135°). Holes on the
+   centerlines need no angle: EQ SP and the centerlines define them.
 9. External threads: `add_hole_note` with the point on the thread line in a side view
    gives the thread note ("M42x1.5 - 6g").
 10. Chamfers: `add_chamfer_note` on a view where the chamfer is a slanted line,
@@ -118,15 +126,21 @@ each machined part drawing has **all** of these:
 
 1. **Datums.** A: the primary functional face (the face it mounts or seats on) or the
    main bore/axis for a turned part. B: the locating axis or bore (or the second face).
-   C only when a third direction matters. `add_datum` on the face; for an axis,
-   `attach=False` with the triangle on the extension line of the Ø dimension.
+   C only when a third direction matters. A face datum: `add_datum` with the triangle on
+   the face line (or its extension line), box beside it outside the part. An axis datum
+   (bore, seat): `add_datum(view, 0, 0, "B", 0, 0, dimension=i)` puts the triangle on the
+   shoulder of that size dimension (Ø51 H8), never loose inside the bore; in a side or
+   section view `attach=False` on the dimension line of the Ø dimension does the same.
 2. **Fits** on every mating diameter: `set_tolerance(index, "fit", fit="H7")` for a bore
    on a shaft or bearing, "h6"/"k6"/"m6" for the shaft side, "H8" for a sliding or weld
    locating fit.
 3. **GD&T on what makes the part work:**
    - mating faces: flatness, or perpendicularity to the axis datum;
-   - bolt or stud hole patterns: position Ø, `diameter_zone=True`, to A and B, as a frame
-     under the hole note or diameter (`leader=False`);
+   - bolt or stud hole patterns: position Ø, `diameter_zone=True`, to A and B, directly
+     under the hole note: `add_gdt(view, 0, 0, 0, 0, "position", 0.2, "A,B",
+     diameter_zone=True, dimension=i)` with i the note's index;
+   - a frame for a size feature (bore, seat) goes under its dimension the same way; a
+     frame for a surface gets a leader to that surface or its extension line;
    - turned seats and faces that run: circular runout (or total runout) to the axis datum;
    - coaxial steps: runout rather than concentricity.
 4. **Surface finish:** "Ra 1,6" on fits and bearing seats, "Ra 3,2" on machined mating
@@ -256,10 +270,11 @@ add_base_view(MODEL, 350, 220, 0.5, "iso_top_right")
 add_centerlines on VIEW1, VIEW2, A
 retrieve_dimensions("VIEW2"); keep the lengths, delete the rest
 add_dimension("A", "vertical", -15, 15, -15, -15, text_x=-37, text_y=0, prefix="Ø")  # Ø30 bore, and Ø60, Ø120 further out
-add_hole_note("VIEW1", 0, -50.5, -55, -74, second_line="EQ SP ON PCD Ø90")
+add_dimension("VIEW1", "diameter", 0, -50.5, -55, -74, prefix="4x ", suffix=" THRU
+ON PCD 90, EQ SP")  -> index n
 add_chamfer_note("A", 24.6, 59.6, 25, 45, 32, 72, prefix="2x ")
 set_tolerance(<Ø30 index>, "fit", fit="H7")
-add_gdt("VIEW1", 0, 0, -50, -80, "position", 0.2, "A,B", diameter_zone=True, leader=False)
+add_gdt("VIEW1", 0, 0, 0, 0, "position", 0.2, "A,B", diameter_zone=True, dimension=n)  # under the note
 add_datum("A", 25, 40, "A", 45, 40); add_datum("A", -31, -15, "B", -31, -23, attach=False)
 add_surface_finish("A", -24.5, 15, -31, 16, "Ra 1,6")
 set_title_block(...); list_views(); export_sheet_png(...); save_document(...); export_pdf(...)

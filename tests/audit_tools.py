@@ -641,6 +641,13 @@ def drawing():
         return f"{out}; {srv.set_tolerance(index, 'basic')}"
     check("add_dimension angle + basic", angle)
 
+    def angle_from_axis():
+        out = srv.add_dimension(state["front"], "angle", 0, 35, text_x=30, text_y=30,
+                                vertex_x=10, vertex_y=0)
+        assert out.split()[2] == "90°", out
+        return out
+    check("add_dimension angle from the axis", angle_from_axis)
+
     def chamfer_note():
         # The block's 1 mm bottom chamfer shows as a slant at one bottom corner of section A
         # (z across, y up); which side is the bottom depends on the cut direction.
@@ -664,6 +671,26 @@ def drawing():
         assert text.endswith("H7"), text
         return out
     check("set_tolerance fit", fit)
+
+    def on_dimension():
+        sheet = srv.inv.active_drawing().ActiveSheet
+        target = next(d for d in json.loads(srv.list_dimensions())
+                      if d["view"] == state["front"] and d["text"].startswith("n20"))
+        before = sheet.DrawingDimensions.GeneralDimensions.Item(target["index"]).Text.FormattedText
+        dims = sheet.DrawingDimensions.GeneralDimensions
+        out = srv.add_dimension(state["front"], "diameter", 10, 0, text_x=-45, text_y=-40,
+                                prefix="2x ", suffix=" THRU\nEQ SP")
+        assert "<Br/>" in dims.Item(dims.Count).Text.FormattedText, out
+        frames = sheet.FeatureControlFrames.Count
+        outs = [srv.add_datum(state["front"], 0, 0, "B", 0, 0, dimension=target["index"]),
+                srv.add_gdt(state["front"], 0, 0, 0, 0, "position", 0.1, "A,B", diameter_zone=True,
+                            dimension=dims.Count)]
+        frame = sheet.FeatureControlFrames.Item(frames + 1).Position
+        r = dims.Item(dims.Count).Text.RangeBox
+        assert frame.Y < r.MinPoint.Y and r.MinPoint.X < frame.X < r.MaxPoint.X, "frame not under the note"
+        assert sheet.DrawingDimensions.GeneralDimensions.Item(target["index"]).Text.FormattedText == before
+        return " / ".join(o.split(" (")[0] for o in [out] + outs)
+    check("suffix note, datum and frame on a dimension", on_dimension)
 
     def gdt():
         sheet = srv.inv.active_drawing().ActiveSheet

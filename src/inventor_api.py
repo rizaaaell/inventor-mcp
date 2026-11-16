@@ -2194,12 +2194,14 @@ class InventorConnection:
     def add_dimension(self, view: str, kind: str, x1: float, y1: float,
                       x2: float | None = None, y2: float | None = None,
                       text_x: float = 0, text_y: float = 0, prefix: str = "",
-                      vertex_x: float = 0, vertex_y: float = 0) -> str:
+                      vertex_x: float = 0, vertex_y: float = 0, suffix: str = "") -> str:
         """kind: diameter / radius (curve nearest x1,y1); horizontal / vertical / aligned
         (between the curves nearest x1,y1 and x2,y2); angle (between the centers of the
         circles nearest x1,y1 and x2,y2, seen from the center of the circle nearest
-        vertex_x,vertex_y, e.g. two bolt holes around the bore). All points in model mm from
-        the view center. prefix goes before the value, e.g. "Ø" for a diameter in a side view."""
+        vertex_x,vertex_y, e.g. two bolt holes around the bore; without x2,y2 the angle is
+        from the horizontal axis through the vertex, on its right, to the hole). All points in model mm from
+        the view center. prefix goes before the value, e.g. "Ø" for a diameter in a side
+        view; suffix after it, "\\n" for a new line, e.g. " THRU\\nON PCD 76, EQ SP"."""
         sheet = self.active_drawing().ActiveSheet
         v = self._view(view)
         dims = sheet.DrawingDimensions.GeneralDimensions
@@ -2213,16 +2215,20 @@ class InventorConnection:
             centerline, miss = self._nearest_circle_centerline(sheet, v, x1, y1)
             dim = dims.AddDiameter(text, sheet.CreateGeometryIntent(centerline))
         elif kind == "angle":
-            if x2 is None or y2 is None:
-                raise ValueError("An angle dimension needs x2 and y2")
             c1, m1 = self._nearest_curve(v, x1, y1, circular=True)
-            c2, m2 = self._nearest_curve(v, x2, y2, circular=True)
             cv, mv = self._nearest_curve(v, vertex_x, vertex_y, circular=True)
-            miss = max(m1, m2, mv)
             center = 57860  # kCenterPointIntent; the vertex is the middle intent
+            if x2 is None or y2 is None:
+                # The far end is the vertex circle's point at 0°; Inventor refuses the one at 180°.
+                g = cv.Segments.Item(1).Geometry
+                end = sheet.CreateGeometryIntent(cv, self._tg().CreatePoint2d(g.Center.X + g.Radius, g.Center.Y))
+                miss = max(m1, mv)
+            else:
+                c2, m2 = self._nearest_curve(v, x2, y2, circular=True)
+                end = sheet.CreateGeometryIntent(c2, center)
+                miss = max(m1, m2, mv)
             dim = dims.AddAngular(text, sheet.CreateGeometryIntent(c1, center),
-                                  sheet.CreateGeometryIntent(cv, center),
-                                  sheet.CreateGeometryIntent(c2, center))
+                                  sheet.CreateGeometryIntent(cv, center), end)
         elif kind in ("horizontal", "vertical", "aligned"):
             if x2 is None or y2 is None:
                 raise ValueError(f"A {kind} dimension needs x2 and y2")
@@ -2235,8 +2241,9 @@ class InventorConnection:
             raise ValueError("kind must be diameter, radius, pcd, angle, horizontal, vertical or aligned")
         if kind != "angle":
             self._fit_precision(dim)
-        if prefix:
-            dim.Text.FormattedText = prefix + dim.Text.FormattedText
+        if prefix or suffix:
+            tail = suffix.replace("\n", "<Br/>")
+            dim.Text.FormattedText = prefix + dim.Text.FormattedText + tail
         self._tag_view(dim, v.Name)
         clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"dimension {dim.Text.Text}" in c]
         picked = "curves" if kind in ("horizontal", "vertical", "aligned", "angle") else "curve"
@@ -2478,19 +2485,36 @@ class InventorConnection:
     def _where(miss) -> str:
         return "at a free point" if miss is None else f"on a curve within {miss:.1f} mm"
 
+    def _dimension_text_rect(self, sheet, index: int):
+        dims = sheet.DrawingDimensions.GeneralDimensions
+        if not 1 <= index <= dims.Count:
+            raise ValueError(f"Dimension index {index} out of range 1..{dims.Count}")
+        return dims.Item(index), self._rect(dims.Item(index).Text)
+
     def add_gdt(self, view: str, x: float, y: float, text_x: float, text_y: float,
                 characteristic: str, tolerance: float, datums: str = "",
-                diameter_zone: bool = False, attach: bool = True, leader: bool = True) -> str:
+                diameter_zone: bool = False, attach: bool = True, leader: bool = True,
+                dimension: int = 0) -> str:
         """Feature control frame with a leader to the curve nearest (x, y).
         datums: comma-separated datum letters in order of precedence, e.g. "A,B".
-        leader False places the bare frame at (text_x, text_y), e.g. under a hole note."""
+        leader False places the bare frame at (text_x, text_y), e.g. under a hole note.
+        dimension: index from list_dimensions; the frame goes directly under that
+        dimension's text without a leader (x, y, text_x, text_y are then ignored), the
+        ISO way to tie a tolerance to a size feature such as a hole pattern."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
         code = self._GDT.get(characteristic.lower())
         if code is None:
             raise ValueError(f"Unknown characteristic {characteristic}. Use {', '.join(self._GDT)}.")
-        points, miss = self._leader_points(v, x, y, text_x, text_y, attach, leader)
+        if dimension:
+            dim, r = self._dimension_text_rect(sheet, dimension)
+            # The frame's position is the middle of its top edge.
+            points = self.app.TransientObjects.CreateObjectCollection()
+            points.Add(self._tg().CreatePoint2d((r[0] + r[2]) / 20, (r[1] - 1.5) / 10))
+            leader, miss = False, None
+        else:
+            points, miss = self._leader_points(v, x, y, text_x, text_y, attach, leader)
         marker = "," if self._profile_of(doc).get("decimal_marker", "comma") == "comma" else "."
         value = f"{tolerance:g}".replace(".", marker)
         letters = [d.strip() for d in datums.split(",") if d.strip()][:3]
@@ -2499,7 +2523,8 @@ class InventorConnection:
         rows.Add(code, ("Ø" if diameter_zone else "") + value, "", *letters)
         sheet.FeatureControlFrames.Add(points, rows)
         frame = " | ".join([characteristic, ("Ø" if diameter_zone else "") + value] + [d for d in letters if d])
-        where = "no leader" if not leader else f"leader {self._where(miss)}"
+        where = f"under dimension {dimension}" if dimension else (
+            "no leader" if not leader else f"leader {self._where(miss)}")
         return f"Feature control frame [{frame}] in {v.Name} ({where})"
 
     _DATUM_SYMBOL = "Datum identifier (MCP)"
@@ -2526,18 +2551,34 @@ class InventorConnection:
         return definition
 
     def add_datum(self, view: str, x: float, y: float, label: str,
-                  text_x: float, text_y: float, attach: bool = True) -> str:
+                  text_x: float, text_y: float, attach: bool = True, dimension: int = 0) -> str:
         """Datum identifier: letter in a box at (text_x, text_y), filled triangle on the
         curve nearest (x, y), or exactly at (x, y) with attach False (e.g. on the extension
-        line of a diameter, which makes the axis the datum). Model mm from the view center."""
+        line of a diameter, which makes the axis the datum). Model mm from the view center.
+        dimension: index from list_dimensions; the triangle sits on the outer end of that
+        size dimension's text shoulder, box below it, so the feature's axis is the datum
+        (x, y, text_x, text_y are then ignored)."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
-        points, miss = self._leader_points(v, x, y, text_x, text_y, attach)
+        if dimension:
+            dim, r = self._dimension_text_rect(sheet, dimension)
+            middle = v.Center.X * 10
+            # The shoulder runs under the text; its outer end faces away from the view.
+            end_x = r[2] if (r[0] + r[2]) / 2 >= middle else r[0]
+            side = 1 if end_x == r[2] else -1
+            tg = self._tg()
+            points = self.app.TransientObjects.CreateObjectCollection()
+            points.Add(tg.CreatePoint2d((end_x + side * 6) / 10, (r[1] - 9) / 10))
+            points.Add(tg.CreatePoint2d(end_x / 10, r[1] / 10))
+            miss = None
+        else:
+            points, miss = self._leader_points(v, x, y, text_x, text_y, attach)
         prompts = win32com.client.VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_BSTR, [label])
         symbol = sheet.SketchedSymbols.AddWithLeader(self._datum_definition(doc), points, 0.0, 1.0, prompts)
         symbol.Leader.ArrowheadType = 71955  # kDatum60FilledArrowheadType
-        return f"Datum {label} in {v.Name} (triangle {self._where(miss)})"
+        where = f"on the shoulder of dimension {dimension}" if dimension else self._where(miss)
+        return f"Datum {label} in {v.Name} (triangle {where})"
 
     def add_surface_finish(self, view: str, x: float, y: float, text_x: float, text_y: float,
                            roughness: str = "Ra 3,2", removal: str = "required",
