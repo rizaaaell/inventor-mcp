@@ -2555,22 +2555,25 @@ class InventorConnection:
         """Datum identifier: letter in a box at (text_x, text_y), filled triangle on the
         curve nearest (x, y), or exactly at (x, y) with attach False (e.g. on the extension
         line of a diameter, which makes the axis the datum). Model mm from the view center.
-        dimension: index from list_dimensions; the triangle sits on the outer end of that
-        size dimension's text shoulder, box below it, so the feature's axis is the datum
+        dimension: index from list_dimensions; the triangle sits on that size dimension's
+        text shoulder near the leader, box below it, so the feature's axis is the datum
         (x, y, text_x, text_y are then ignored)."""
         doc = self.active_drawing()
         sheet = doc.ActiveSheet
         v = self._view(view)
         if dimension:
             dim, r = self._dimension_text_rect(sheet, dimension)
-            middle = v.Center.X * 10
-            # The shoulder runs under the text; its outer end faces away from the view.
-            end_x = r[2] if (r[0] + r[2]) / 2 >= middle else r[0]
-            side = 1 if end_x == r[2] else -1
+            # Drawn like Inventor's own datum identifier, which the API cannot create:
+            # triangle on the shoulder 4 mm in from the end the leader joins, a drop of
+            # 9 mm, then across to the box.
+            inner_right = (r[0] + r[2]) / 2 < v.Center.X * 10
+            foot = r[2] - 4 if inner_right else r[0] + 4
+            box = foot + (8 if inner_right else -8)
             tg = self._tg()
             points = self.app.TransientObjects.CreateObjectCollection()
-            points.Add(tg.CreatePoint2d((end_x + side * 6) / 10, (r[1] - 9) / 10))
-            points.Add(tg.CreatePoint2d(end_x / 10, r[1] / 10))
+            points.Add(tg.CreatePoint2d(box / 10, (r[1] - 9) / 10))
+            points.Add(tg.CreatePoint2d(foot / 10, (r[1] - 9) / 10))
+            points.Add(tg.CreatePoint2d(foot / 10, r[1] / 10))
             miss = None
         else:
             points, miss = self._leader_points(v, x, y, text_x, text_y, attach)

@@ -431,6 +431,13 @@ Verified while building the phase 3 tools (2027.1):
 - `DrawingWeldingSymbol` has no `RangeBox`; `Position` is the knee of the reference line.
 - A weld symbol needs no weldment: `Sheet.WeldingSymbols.Add` works on any assembly view.
 
+- **No drawing datum identifier in the API.** The ribbon's Datum Identifier Symbol has no
+  collection on `Sheet` (the typelib only has `ModelDatum*` for 3D annotations).
+  `add_datum` draws the same shape with a sketched symbol: triangle
+  (`kDatum60FilledArrowheadType`) on the dimension shoulder, square leader to the box.
+- **`AddAngular` refuses a point intent at 180° on a circle** (the one at 0° works), so an
+  angle from the axis is measured from the right side.
+
 ## Closing documents
 
 - `Document.Close` on a part an open assembly or drawing still uses shows an

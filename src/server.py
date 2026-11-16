@@ -835,8 +835,8 @@ def add_datum(view: str, x: float, y: float, label: str, text_x: float, text_y: 
     """Datum feature symbol: the letter in a box at (text_x, text_y), with a filled triangle
     on the curve nearest (x, y). attach False puts the triangle exactly at (x, y), e.g. on
     the extension line of a diameter dimension to make the axis the datum.
-    dimension: index from list_dimensions; the triangle goes on the outer end of that size
-    dimension's text shoulder, box below it (x, y, text_x, text_y ignored). This is how an
+    dimension: index from list_dimensions; the triangle goes on that size dimension's text
+    shoulder near its leader, with a square leader down to the box (x, y, text_x, text_y ignored). This is how an
     axis (bore, shaft seat) becomes a datum.
     Points are model mm from the view center."""
     return inv.add_datum(view, x, y, label, text_x, text_y, attach, dimension)
