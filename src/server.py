@@ -619,7 +619,8 @@ def create_drawing(profile: str = "default", template: str = "", sheet_size: str
 def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
                   orientation: str = "front", style: str = "visible",
                   design_view: str = "", positional: str = "",
-                  spin: float = 0, spin_axis: str = "Z", weldment_state: str = "") -> str:
+                  spin: float = 0, spin_axis: str = "Z", weldment_state: str = "",
+                  flat_pattern: bool = False) -> str:
     """Place the first view of a part or assembly file, centered at (x, y) on the sheet.
     A view that would leave the border or overlap the title block or another view is
     removed again and an error says why.
@@ -638,9 +639,11 @@ def add_base_view(model_path: str, x: float, y: float, scale: float = 1.0,
               bolts on one line; spin 30 about the flange axis separates them.
         weldment_state: for a weldment: assembly, preparations, welds (default for a
               weldment, shows the welds) or machining.
+        flat_pattern: True draws the unfolded blank of a sheet metal part (the flat pattern
+              is made if the part has none). Follow with add_bend_notes.
     """
     return inv.add_base_view(model_path, x, y, scale, orientation, style, design_view, positional,
-                             spin, spin_axis, weldment_state)
+                             spin, spin_axis, weldment_state, flat_pattern)
 
 
 @mcp.tool()
@@ -739,6 +742,14 @@ ON PCD 76, EQ SP".
 
 
 @mcp.tool()
+def add_bend_notes(view: str) -> str:
+    """Bend notes on every bend line of a flat pattern view: direction, angle and inside
+    radius, e.g. "UP 90° R2", along the line. The view must come from
+    add_base_view(..., flat_pattern=True)."""
+    return inv.add_bend_notes(view)
+
+
+@mcp.tool()
 def add_hole_note(view: str, x: float, y: float, text_x: float, text_y: float,
                   second_line: str = "", count: int = 0) -> str:
     """Hole note on the hole edge nearest (x, y), e.g. "4x Ø11 THRU" for patterned holes, or a
@@ -806,7 +817,7 @@ def set_tolerance(index: int, kind: str, upper: float = 0, lower: float = 0, fit
 def add_gdt(view: str, x: float, y: float, text_x: float, text_y: float,
             characteristic: str, tolerance: float, datums: str = "",
             diameter_zone: bool = False, attach: bool = True, leader: bool = True,
-            dimension: int = 0) -> str:
+            dimension: int = 0, modifier: str = "") -> str:
     """Feature control frame, with a leader to the curve nearest (x, y).
 
     Args:
@@ -817,8 +828,11 @@ def add_gdt(view: str, x: float, y: float, text_x: float, text_y: float,
                         profile_surface, angularity, perpendicularity, parallelism,
                         position, concentricity, symmetry, circular_runout, total_runout.
         tolerance: tolerance value in mm, e.g. 0.05.
-        datums: datum letters in order of precedence, e.g. "A,B".
+        datums: datum letters in order of precedence, e.g. "A,B"; "B(M)" / "B(L)" for a
+                size-feature datum at maximum / least material condition.
         diameter_zone: True puts Ø before the value (cylindrical zone, e.g. for position).
+        modifier: "mmc" (Ⓜ) or "lmc" (Ⓛ) after the value; MMC on the position of
+                  clearance holes lets the tolerance grow as the hole grows.
         attach: False ends the leader exactly at (x, y), e.g. on an extension line.
         leader: False places the bare frame at (text_x, text_y).
         dimension: index from list_dimensions; the frame goes right under that dimension's
@@ -826,7 +840,7 @@ def add_gdt(view: str, x: float, y: float, text_x: float, text_y: float,
                    feature: position under the hole note, runout under a diameter.
     """
     return inv.add_gdt(view, x, y, text_x, text_y, characteristic, tolerance, datums,
-                       diameter_zone, attach, leader, dimension)
+                       diameter_zone, attach, leader, dimension, modifier)
 
 
 @mcp.tool()

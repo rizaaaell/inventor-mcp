@@ -484,6 +484,21 @@ def sheet_metal():
         return f"flat pattern {size[0]} x {size[1]} mm"
     check("flat pattern", flat)
 
+    def flat_drawing():
+        path = str(OUT / "audit_sheet.ipt")
+        srv.save_document(path)
+        srv.create_drawing()
+        try:
+            view = srv.add_base_view(path, 150, 150, 1, flat_pattern=True)
+            assert "flat pattern" in view, view
+            name = view.split()[2].rstrip(":")
+            notes = srv.add_bend_notes(name)
+            assert notes.startswith("1 bend note") and "90°" in notes, notes
+            return f"{view} | {notes}"
+        finally:
+            close_active()
+    check("flat pattern view + add_bend_notes", flat_drawing)
+
     close_active()
 
 
@@ -705,6 +720,9 @@ def drawing():
         assert (sheet.FeatureControlFrames.Count, sheet.SketchedSymbols.Count,
                 sheet.SurfaceTextureSymbols.Count) == (frames + 2, symbols + 1, finishes + 1), "counts"
         assert "Ø0,2" in outs[2], outs[2]
+        mmc = srv.add_gdt(state["front"], 35, 4, 58, 70, "position", 0.2, "A,B(M)",
+                          diameter_zone=True, modifier="mmc")
+        assert "Ø0,2Ⓜ" in mmc and "BⓂ" in mmc, mmc
         return " / ".join(o.split(" (")[0] for o in outs)
     check("add_datum + add_gdt + add_surface_finish", gdt)
 

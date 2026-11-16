@@ -68,7 +68,7 @@ Do not use `win32com.client.gencache.EnsureDispatch` against the same Python ins
 `gen_py` cache breaks `GetActiveObject`. Read `RxInventor.tlb` with
 `pythoncom.LoadTypeLib` instead (see the modeling skill).
 
-## Tools (83)
+## Tools (84)
 
 All lengths in mm, angles in degrees.
 
@@ -108,11 +108,11 @@ Inventor 2027's presentation API cannot add tweaks, so exploded drawings come fr
 constraint-free copy of the assembly.
 
 **Drawings**: `create_drawing` (from a drawing profile), `add_base_view` (parts and
-assemblies, design view, turned iso camera), `add_projected_view`, `add_section_view`
+assemblies, design view, turned iso camera, sheet metal flat pattern), `add_projected_view`, `add_section_view`
 (unhatched shafts), `add_detail_view`, `add_centerlines`, `retrieve_dimensions`,
-`add_dimension` (linear, diameter, radius, PCD, angle), `list_dimensions`,
+`add_dimension` (linear, diameter, radius, PCD, angle, multi-line hole notes), `list_dimensions`,
 `delete_dimension`, `move_dimension`, `set_tolerance` (symmetric, deviation, limits, ISO
-fits, basic), `add_hole_note`, `add_chamfer_note`, `add_gdt`, `add_datum`,
+fits, basic), `add_hole_note`, `add_chamfer_note`, `add_bend_notes`, `add_gdt` (MMC/LMC), `add_datum`,
 `add_surface_finish`, `list_notes`, `delete_note`, `move_view`, `delete_view`,
 `set_component_visibility`,
 `set_title_block` (MATERIAL always stated), `add_parts_list`, `add_balloons`, `list_views`
@@ -150,7 +150,7 @@ With Inventor running:
 
 ```
 python -X utf8 -u tests/smoke.py        # 8 regression cases, volumes and drawing layout
-python -X utf8 -u tests/audit_tools.py  # every tool, 117 checks
+python -X utf8 -u tests/audit_tools.py  # every tool, 120 checks
 ```
 
 Test output goes to `C:\inventor-test\`. `experiments/` holds the full scripts behind the

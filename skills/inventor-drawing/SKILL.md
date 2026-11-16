@@ -118,6 +118,13 @@ ON PCD 76, EQ SP")` reads "4x Ø8 THRU / ON PCD 76, EQ SP"; it works for
 10. Chamfers: `add_chamfer_note` on a view where the chamfer is a slanted line,
    `prefix="2x "` for equal chamfers.
 
+11. Sheet metal parts: the folded part in front and side views (bend radius, flange
+   heights, angles) plus the blank: `add_base_view(model, x, y, 1, flat_pattern=True)`,
+   then `add_bend_notes(view)` puts "UP 90° R2" / "DOWN 90° R2" on every bend line, and
+   overall length and width of the blank go on that view. Label it with a note such as
+   "FLAT PATTERN" if the profile has no view label. Holes in the blank are dimensioned
+   there, from one edge.
+
 ### Tolerances, datums and GD&T: required on every machined part
 
 A part drawing without datums is not finished. The general tolerances in the title block
@@ -139,6 +146,10 @@ each machined part drawing has **all** of these:
    - bolt or stud hole patterns: position Ø, `diameter_zone=True`, to A and B, directly
      under the hole note: `add_gdt(view, 0, 0, 0, 0, "position", 0.2, "A,B",
      diameter_zone=True, dimension=i)` with i the note's index;
+   - clearance holes for bolts: position at MMC, `modifier="mmc"` (Ø0,2Ⓜ), so the
+     tolerance grows as the hole comes out larger and a gauge pin can check it; press
+     fits and locating pins stay without a modifier. A datum that is a size feature (a
+     bore) may be referenced at MMC too: `datums="A,B(M)"`;
    - a frame for a size feature (bore, seat) goes under its dimension the same way; a
      frame for a surface gets a leader to that surface or its extension line;
    - turned seats and faces that run: circular runout (or total runout) to the axis datum;

@@ -1612,9 +1612,11 @@ class InventorConnection:
     def add_base_view(self, model_path: str, x: float, y: float, scale: float = 1.0,
                       orientation: str = "front", style: str = "visible",
                       design_view: str = "", positional: str = "",
-                      spin: float = 0, spin_axis: str = "Z", weldment_state: str = "") -> str:
+                      spin: float = 0, spin_axis: str = "Z", weldment_state: str = "",
+                      flat_pattern: bool = False) -> str:
         """spin turns the camera of the orientation by that many degrees about the model's
-        spin_axis, e.g. so the bolts of a flange stop hiding each other in an iso view."""
+        spin_axis, e.g. so the bolts of a flange stop hiding each other in an iso view.
+        flat_pattern: the unfolded blank of a sheet metal part (made if the part has none)."""
         sheet = self.active_drawing().ActiveSheet
         orient = self._VIEW_ORIENTATIONS.get(orientation.lower())
         if orient is None:
@@ -1634,6 +1636,15 @@ class InventorConnection:
                 if name not in names:
                     raise ValueError(f"No {key} {name!r} in {model.DisplayName}: {names}")
                 options.Add(key, name)
+        if flat_pattern:
+            definition = model.ComponentDefinition
+            if not hasattr(definition, "FlatPattern"):
+                raise ValueError(f"{model.DisplayName} is not a sheet metal part")
+            if not definition.HasFlatPattern:
+                definition.Unfold()
+                definition.FlatPattern.ExitEdit()
+            options = options or self.app.TransientObjects.CreateNameValueMap()
+            options.Add("SheetMetalFoldedModel", False)
         first = sheet.DrawingViews.Count == 0
         camera, name = self._spun_camera(sheet, model, orient, spin, spin_axis) if spin else (None, "")
         view = sheet.DrawingViews.AddBaseView(
@@ -1652,7 +1663,8 @@ class InventorConnection:
         if first:
             filled = self._apply_title_defaults(self.active_drawing())
             note = f"; title block defaults filled: {', '.join(filled)}" if filled else ""
-        return f"Base view {view.Name}: {orientation}, scale {scale:g}, {self._fmt_rect(rect)}{note}"
+        kind = "flat pattern" if flat_pattern else orientation
+        return f"Base view {view.Name}: {kind}, scale {scale:g}, {self._fmt_rect(rect)}{note}"
 
     def _spun_camera(self, sheet, model, orient: int, spin: float, axis: str):
         """Camera of a standard orientation turned about a model axis through its target."""
@@ -1858,12 +1870,13 @@ class InventorConnection:
                 boxes.append((f"hole note {n.Text.Text}", self._rect(n.Text)))
             except Exception:
                 pass
-        notes = sheet.DrawingNotes.ChamferNotes
-        for i in range(1, notes.Count + 1):
-            try:  # a chamfer note's Text is a plain string; the box is the note's own
-                boxes.append((f"chamfer note {notes.Item(i).Text}", self._rect(notes.Item(i))))
-            except Exception:
-                pass
+        for label, notes in (("chamfer note", sheet.DrawingNotes.ChamferNotes),
+                             ("bend note", sheet.DrawingNotes.BendNotes)):
+            for i in range(1, notes.Count + 1):
+                try:  # these notes' Text is a plain string; the box is the note's own
+                    boxes.append((f"{label} {notes.Item(i).Text}", self._rect(notes.Item(i))))
+                except Exception:
+                    pass
         return boxes
 
     def _text_boxes(self, sheet):
@@ -2326,6 +2339,27 @@ class InventorConnection:
         return (f"Hole note '{note.Text.Text}' in {v.Name} (picked hole edge within {miss:.1f} mm); "
                 f"text overlaps: {clashes or 'none'}")
 
+    def add_bend_notes(self, view: str) -> str:
+        """Bend note (direction, angle, inside radius, e.g. "UP 90° R2") on every bend line
+        of a flat pattern view, along the line."""
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        notes = []
+        curves = v.DrawingCurves
+        for i in range(1, curves.Count + 1):
+            curve = curves.Item(i)
+            try:
+                edge = curve.EdgeType
+            except Exception:
+                continue
+            if edge in (82690, 82691):  # kBendUpEdge, kBendDownEdge
+                notes.append(sheet.DrawingNotes.BendNotes.Add(curve).Text)
+        if not notes:
+            raise ValueError(f"No bend lines in {v.Name}; bend notes go on a flat pattern view "
+                             "(add_base_view(..., flat_pattern=True))")
+        clashes = [c for c in self._clashes(self._text_boxes(sheet)) if any("bend note" in n for n in c)]
+        return f"{len(notes)} bend note(s) in {v.Name}: {', '.join(notes)}; text overlaps: {clashes or 'none'}"
+
     def add_chamfer_note(self, view: str, x: float, y: float, ref_x: float, ref_y: float,
                          text_x: float, text_y: float, prefix: str = "") -> str:
         """Chamfer note ("1 x 45°") on the chamfer line nearest (x, y), measured against the
@@ -2494,9 +2528,11 @@ class InventorConnection:
     def add_gdt(self, view: str, x: float, y: float, text_x: float, text_y: float,
                 characteristic: str, tolerance: float, datums: str = "",
                 diameter_zone: bool = False, attach: bool = True, leader: bool = True,
-                dimension: int = 0) -> str:
+                dimension: int = 0, modifier: str = "") -> str:
         """Feature control frame with a leader to the curve nearest (x, y).
-        datums: comma-separated datum letters in order of precedence, e.g. "A,B".
+        datums: comma-separated datum letters in order of precedence, e.g. "A,B";
+        "B(M)" or "B(L)" puts the datum at maximum or least material condition.
+        modifier: "mmc" or "lmc" after the tolerance value.
         leader False places the bare frame at (text_x, text_y), e.g. under a hole note.
         dimension: index from list_dimensions; the frame goes directly under that
         dimension's text without a leader (x, y, text_x, text_y are then ignored), the
@@ -2516,16 +2552,36 @@ class InventorConnection:
         else:
             points, miss = self._leader_points(v, x, y, text_x, text_y, attach, leader)
         marker = "," if self._profile_of(doc).get("decimal_marker", "comma") == "comma" else "."
-        value = f"{tolerance:g}".replace(".", marker)
-        letters = [d.strip() for d in datums.split(",") if d.strip()][:3]
+        value = ("Ø" if diameter_zone else "") + f"{tolerance:g}".replace(".", marker)
+        value += self._material_symbol(modifier)
+        letters = [self._datum_letter(d) for d in datums.split(",") if d.strip()][:3]
         letters += [""] * (3 - len(letters))
         rows = sheet.FeatureControlFrames.CreateFeatureControlFrameRows()
-        rows.Add(code, ("Ø" if diameter_zone else "") + value, "", *letters)
+        rows.Add(code, value, "", *letters)
         sheet.FeatureControlFrames.Add(points, rows)
-        frame = " | ".join([characteristic, ("Ø" if diameter_zone else "") + value] + [d for d in letters if d])
+        frame = " | ".join([characteristic, value] + [d for d in letters if d])
         where = f"under dimension {dimension}" if dimension else (
             "no leader" if not leader else f"leader {self._where(miss)}")
         return f"Feature control frame [{frame}] in {v.Name} ({where})"
+
+    # The frame text takes the Unicode circled letters and draws them as the ISO symbols.
+    _MATERIAL = {"": "", "mmc": "Ⓜ", "m": "Ⓜ", "lmc": "Ⓛ", "l": "Ⓛ"}
+
+    @classmethod
+    def _material_symbol(cls, modifier: str) -> str:
+        key = modifier.strip().lower()
+        if key not in cls._MATERIAL:
+            raise ValueError("modifier must be mmc, lmc or empty")
+        return cls._MATERIAL[key]
+
+    @classmethod
+    def _datum_letter(cls, text: str) -> str:
+        """"B(M)" -> "BⓂ"."""
+        text = text.strip()
+        if text.endswith(")") and "(" in text:
+            letter, mod = text[:-1].split("(", 1)
+            return letter.strip() + cls._material_symbol(mod)
+        return text
 
     _DATUM_SYMBOL = "Datum identifier (MCP)"
 
