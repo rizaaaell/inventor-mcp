@@ -27,11 +27,15 @@ in `docs/inventor-api-notes.md` and `docs/inventor-2027-notes.md`.
 
 ## Installation
 
-1. Clone:
+1. Clone. Arjuna team members (invited to the private assets repository) take the team
+   templates, styles and profile values with it:
    ```
-   git clone https://github.com/rizaaaell/inventor-mcp.git
+   git clone --recurse-submodules https://github.com/rizaaaell/inventor-mcp.git
    cd inventor-mcp
    ```
+   In an existing clone: `git submodule update --init`. Everyone else clones without
+   `--recurse-submodules` and uses `create_drawing(profile="iso")`; the `references/`
+   folder then stays empty.
 2. Install the dependencies. **Keep `mcp` below 2**: the server is written against the
    1.x `mcp.server.fastmcp` API, and the pin in `pyproject.toml` stops an upgrade from
    changing it underneath you.
@@ -119,7 +123,7 @@ fits, basic), `add_hole_note`, `add_chamfer_note`, `add_gdt`, `add_datum`,
 `drawing_profiles/*.json` set template, sheet size, projection angle, units, decimal mark,
 precision, view labels, general tolerances, title block defaults and parts list layout
 (`docs/drawing-profiles.md`). `default` uses a team template that is not in this
-repository (`references/` is git-ignored); `iso` uses Inventor's own ISO template and
+repository but in the private `references/` submodule; `iso` uses Inventor's own ISO template and
 works on any machine: `create_drawing(profile="iso")`.
 
 ## Skills

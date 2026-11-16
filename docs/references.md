@@ -1,8 +1,12 @@
 # Reference material
 
-Team material that guides the drawings lives in `references/` at the repo root. The
-folder is in `.gitignore` and must stay out of git: the GitHub fork is public, and the
-material is Arjuna's.
+Team material that guides the drawings lives in `references/` at the repo root. It is a
+git submodule pointing at the **private** repository `rizaaaell/inventor-mcp-arjuna`: this
+fork is public, the material is Arjuna's, so only invited team members can fetch it
+(`git clone --recurse-submodules`, or `git submodule update --init`). Commit changes to the
+templates or team profiles inside `references/` and push them there, then commit the new
+submodule pointer here. `references/standar/` (licensed standards and books) stays out of
+both repositories and is shared through the team drive.
 
 | Folder | Holds | Used for |
 |---|---|---|
@@ -10,6 +14,7 @@ material is Arjuna's.
 | `references/baseline/` | Arjuna's 2024 FSAE Japan supplement drawings (PDF) | the bar Claude's drawings are compared against |
 | `references/templates/` | Arjuna `.idw` templates and `.styxml` style exports, as received | source of the team look |
 | `references/templates/2027/` | copies of the templates opened and saved in Inventor 2027 | the `template` of the default drawing profile |
+| `references/drawing_profiles/` | team values laid over the public profiles of the same name (e.g. APPROVED BY) | team defaults kept out of the public repository |
 
 How each is used:
 
