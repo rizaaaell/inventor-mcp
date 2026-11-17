@@ -45,6 +45,7 @@ class InventorConnection:
 
     def connect(self, visible: bool = True) -> str:
         pythoncom.CoInitialize()
+        self.__dict__.pop("_cc_cache", None)  # holds COM objects of the previous Inventor
         try:
             self._app = win32com.client.GetActiveObject("Inventor.Application")
             return f"Connected to running Inventor {self._app.SoftwareVersion.DisplayVersion}"
