@@ -438,6 +438,54 @@ Verified while building the phase 3 tools (2027.1):
 - **`AddAngular` refuses a point intent at 180° on a circle** (the one at 0° works), so an
   angle from the axis is measured from the right side.
 
+## Multi-sheet drawings and full dimensioning (RK-002 revision, 2026-11-22)
+
+Found while taking RK-002 Rear Knuckle from one sheet with "rest per 3D model" to two
+fully dimensioned sheets, all through `execute_python`. None of it is a tool yet.
+
+- **No tool adds a sheet, and the API route to a templated sheet fails.**
+  `Sheets.Add(kA2DrawingSheetSize 9995, kLandscapePageOrientation 10242)` makes a bare
+  sheet, but `AddBorder(definition)` and `AddTitleBlock(definition [, None, prompts])`
+  both raise E_INVALIDARG (0x80070057) for the Arjuna definitions, with or without a
+  prompt array; only `AddDefaultBorder()` works. A third positional argument to
+  `Sheets.Add` is the sheet name, not a size ("59.4:2").
+  What works: `sheet.CopyTo(drawingDoc)`, then delete its views, general notes and
+  feature control frames. The copy keeps the title block with its prompt values, and the
+  `Sheet Number` derived property shows "2/2" by itself. GD&T frames survive deleting
+  the views as orphans in their old positions; delete them too. Rename with `Sheet.Name`.
+- **`DrawingView.DrawingCurves` is a property.** `view.DrawingCurves()` and
+  `view.DrawingCurves(None)` raise "Invalid number of parameters" / "Type mismatch".
+- **Curve types seen** (`DrawingCurve.CurveType`): 5123 line, 5124 circle, 5125 arc,
+  5127 elliptical arc, 5128 B-spline. Edges lying on a doubly curved face (here a torus
+  blend) come out as 5128 even where they look straight or circular.
+  - `add_dimension(kind="radius")` near such a corner silently picks the nearest real arc
+    instead: it reported "R42,5 TYP" for an R5 window corner ("picked curve within
+    14.6 mm"). Treat a pick distance above ~1 mm on a radius as a wrong pick.
+  - Linear dimensions between 5128 curves measure correctly.
+- **Point intents on a line** (`Sheet.CreateGeometryIntent(curve, PointIntentEnum)`):
+  57858 gave the far end used in the measurement, 57859/57860 gave other values
+  (57860 is `kCenterPointIntent`). The start/end naming is not reliable; check the
+  resulting value. `GeneralDimensions.AddLinear(textPt, intentOfLine, Missing, type)`
+  with one line intent dimensions the length of that line.
+- **`LeaderNotes.Add(points, text)`: text position first, geometry intent last.** The
+  reverse order raises E_INVALIDARG.
+- **`move_dimension` only moves dimensions the tools made** ("has no recorded view").
+  For others set `dim.Text.Origin` to a sheet `Point2d` (cm).
+- **`DrawingView.Label.Position`** is settable; moving a section label up 10 mm cleared a
+  dimension that sat under "A-A ( 1 : 1 )".
+- **Orientation names depend on how the part was modelled.** For RK-002 the bore axis is
+  the part's X axis, so the face view of the bore is `orientation="right"`, not `"front"`.
+- **Derived parts have no sketches or features**, so `retrieve_dimensions` returns
+  nothing. Sizes come from `SurfaceBody.Faces` (plane normal/offset, cylinder radius and
+  axis, torus `MajorRadius`/`MinorRadius`/`CenterPoint`/`AxisVector`) and from the view's
+  curves. A torus blend about the bore axis cuts to an arc of `MinorRadius` only in a
+  section plane through that axis where there is material.
+- **`save_document` and `export_pdf` hit the MCP request timeout** on this A2 drawing
+  with 60+ dimensions. After the timeout the server had dropped the connection
+  (`status` said not connected; `connect` reattached to the same Inventor). The PDF had
+  been written; the save had not (drawing still `Dirty`). `doc.Save2(True)` with
+  `app.SilentOperation = True` saved it at once.
+
 ## Closing documents
 
 - `Document.Close` on a part an open assembly or drawing still uses shows an
