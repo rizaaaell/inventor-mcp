@@ -85,7 +85,16 @@ each circle, in chain line.
    - turned parts: diameters as `vertical` (or `horizontal`) dimensions with `prefix="Ø"`
      in the section or side view, stacked outside the outline, smallest nearest;
    - `diameter` / `radius` for circles seen as circles;
-   - `angle` for hole spacing (vertex on the bore circle).
+   - `angle` for hole spacing (vertex on the bore circle);
+   - the length of one edge: `horizontal` / `vertical` / `aligned` with both points on
+     that edge;
+   - a sloped wall: `line_angle` with one point on the slope and one on the face it is
+     measured from;
+   - a size from an axis: put that point on the straight centerline (from
+     `add_centerlines`), away from any edge; a centerline nearer than every curve wins.
+   - A rounded corner on a curved face (torus, fillet across a revolve) shows as a spline
+     and takes no `radius` dimension; the tool refuses a point more than 1,5 mm from a
+     real arc. State such radii with `add_note` (with `leader_x/leader_y` for an arrow).
 4. Text positions go **outside the part**. Never dimension to a hidden line. The text
    lands a few mm from where you ask (the dimension line snaps); check the result.
 5. Section and detail labels ("A-A ( 1 : 1 )") sit **above** their view. Keep dimensions
@@ -196,9 +205,15 @@ the file name until set). Fill them before drawing:
 2. `export_sheet_png(path)` and **open the PNG with Read**. Look for dimensions inside
    the part, leaders pointing at the wrong thing, crowded corners, missing centerlines.
    The checker cannot see these.
-3. Fix with `move_dimension`, `delete_dimension` and new placements, then check again.
-4. `save_document("C:/.../name.idw")`, then `export_pdf(path)`.
-5. For a close look at the PDF: `powershell -File tools\pdf2png.ps1 -Pdf <pdf> -OutDir <dir>`
+3. Fix with `move_dimension`, `delete_dimension`, `move_view_label` (a section label on
+   a dimension) and new placements, then check again.
+4. **One sheet not enough?** `add_sheet()` adds a sheet with the same border and title
+   block (the sheet field counts "2/2" by itself) and makes it active; place more views
+   of the model there (details, extra sections) with `add_base_view`/`add_section_view`.
+   `activate_sheet("1")` goes back; `list_views()` reports the active sheet and all
+   sheets. `export_pdf` writes every sheet.
+5. `save_document("C:/.../name.idw")`, then `export_pdf(path)`.
+6. For a close look at the PDF: `powershell -File tools\pdf2png.ps1 -Pdf <pdf> -OutDir <dir>`
    renders pages with Windows' own PDF engine.
 
 ## Assembly drawings: exploded view by default

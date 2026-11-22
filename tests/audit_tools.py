@@ -1065,6 +1065,96 @@ def drawing_edits():
     close_audit_files()
 
 
+def drawing_layout():
+    """Line length, line angle, axis picks, radius refusal, notes, labels, extra sheets."""
+    close_audit_files()
+    part = OUT / "audit_bracket.ipt"
+    srv.create_part("audit_bracket")
+    srv.create_sketch("XY")
+    # 80 wide, 50 high, with the top right corner cut at a slope; view x = X - 40, y = Y - 25.
+    srv.draw_closed_profile("[[0,0],[80,0],[80,30],[40,50],[0,50]]")
+    srv.extrude(10)
+    srv.hole(x=20, y=25, diameter=10)
+    srv.save_document(str(part))
+    srv.create_drawing()
+    srv.add_base_view(str(part), 100, 200, 1)
+    srv.add_section_view("VIEW1", -20, 40, -20, -40, 200, 200, "A")
+    srv.add_centerlines("A")
+
+    def value(out):
+        text = out.split(" dimension ", 1)[1].split(" in ", 1)[0]
+        return float(text.replace(",", ".").rstrip("°"))
+
+    def length():
+        out = srv.add_dimension("VIEW1", "horizontal", -20, -25, 10, -25, text_x=0, text_y=-40)
+        assert abs(value(out) - 80) < 0.01, out
+        return out
+    check("add_dimension: both points on one line give its length", length)
+
+    def line_angle():
+        out = srv.add_dimension("VIEW1", "line_angle", 20, 15, -20, 25, text_x=10, text_y=35)
+        angle = value(out)
+        assert min(abs(angle - 26.57), abs(angle - 153.43)) < 0.1, out
+        return out
+    check("add_dimension line_angle", line_angle)
+
+    def radius_refused():
+        try:
+            out = srv.add_dimension("VIEW1", "radius", 20, -20, text_x=30, text_y=-35)
+        except ValueError as exc:
+            return f"refused: {exc}"
+        raise AssertionError(f"a radius 15 mm off any arc was placed: {out}")
+    check("add_dimension radius far from any arc is refused", radius_refused)
+
+    def axis():
+        out = srv.add_dimension("A", "vertical", 0, 0, 2, -25, text_x=-20, text_y=-12)
+        assert abs(value(out) - 25) < 0.01, out
+        return out
+    check("add_dimension from a straight centerline (hole axis)", axis)
+
+    def move_untagged():
+        srv.add_dimension("VIEW1", "vertical", -40, 0, -10, 25, text_x=-55, text_y=0)
+        dims = srv.inv.active_drawing().ActiveSheet.DrawingDimensions.GeneralDimensions
+        dims.Item(dims.Count).AttributeSets.Item(srv.inv._TAG_SET).Delete()
+        return srv.move_dimension(dims.Count, -60, 5)
+    check("move_dimension on a dimension the tools did not tag", move_untagged)
+
+    def notes():
+        a = srv.add_note("ALL EDGES BROKEN 0,5\nUNLESS STATED", 30, 120)
+        b = srv.add_note("SLOPE FACE", 30, 30, view="VIEW1", leader_x=20, leader_y=15)
+        found = json.loads(srv.list_notes())
+        kinds = sorted(n["kind"] for n in found)
+        assert kinds == ["general", "leader"], found
+        srv.delete_note("1,2")
+        assert json.loads(srv.list_notes()) == [], srv.list_notes()
+        return f"{a} | {b}"
+    check("add_note general + leader, list_notes, delete_note", notes)
+
+    def label():
+        sheet = srv.inv.active_drawing().ActiveSheet
+        v = srv.inv._view("A")
+        before = v.Label.Position.Y
+        out = srv.move_view_label("A", 0, 5)
+        assert abs((v.Label.Position.Y - before) * 10 - 5) < 0.01, out
+        return out
+    check("move_view_label", label)
+
+    def sheets():
+        out = srv.add_sheet()
+        doc = srv.inv.active_drawing()
+        assert doc.Sheets.Count == 2 and doc.ActiveSheet.DrawingViews.Count == 0, out
+        assert doc.ActiveSheet.DrawingNotes.GeneralNotes.Count == 0, out
+        layout = json.loads(srv.list_views())
+        assert len(layout["sheets"]) == 2 and layout["sheet"] == doc.Sheets.Item(2).Name, layout
+        srv.add_base_view(str(part), 150, 180, 1)
+        back = srv.activate_sheet("1")
+        assert doc.ActiveSheet.Name == doc.Sheets.Item(1).Name, back
+        return f"{out} | {back}"
+    check("add_sheet, list_views sheets, activate_sheet", sheets)
+    srv.inv.active_document().Close(True)
+    close_audit_files()
+
+
 def server_only():
     """Tools that live only in server.py."""
     check("execute_python stdout", lambda: _equal(srv.execute_python("print(1 + 1)"), "2"))
@@ -1096,7 +1186,7 @@ def _equal(actual, expected):
 
 def main():
     for group in (solid_block, revolves, extrude_variants, sheet_metal, drawing, assembly, weldment,
-                  drawing_edits,
+                  drawing_edits, drawing_layout,
                   server_only):
         print(f"\n{group.__name__}: {group.__doc__}", flush=True)
         try:

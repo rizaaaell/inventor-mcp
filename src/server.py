@@ -722,7 +722,11 @@ def add_dimension(view: str, kind: str, x1: float, y1: float,
         view: view name.
         kind: diameter or radius (curve nearest x1, y1); pcd (circular centerline such as
               a bolt circle nearest x1, y1, after add_centerlines); horizontal, vertical,
-              aligned (distance between the curves nearest x1, y1 and x2, y2); or angle
+              aligned (distance between the curves nearest x1, y1 and x2, y2; both points on
+              one line give that line's length; a straight centerline nearer than any
+              curve counts as an axis, so a size can run from an axis); line_angle (angle
+              between the two lines nearest x1, y1 and x2, y2, e.g. a sloped wall against
+              a face, text at text_x, text_y); or angle
               (between the centers of the circles nearest x1, y1 and x2, y2, around the
               center of the circle nearest vertex_x, vertex_y; e.g. bolt hole spacing).
               Without x2, y2 the angle runs from the horizontal axis through the vertex
@@ -1163,15 +1167,56 @@ def delete_view(view: str) -> str:
 
 @mcp.tool()
 def list_notes() -> str:
-    """Hole and chamfer notes on the active sheet: index, kind, text, centre (sheet mm)."""
+    """Hole, chamfer, bend, general and leader notes on the active sheet: index, kind, text,
+    centre (sheet mm)."""
     return json.dumps(inv.list_notes(), indent=1, ensure_ascii=False)
 
 
 @mcp.tool()
 def delete_note(indices: str) -> str:
-    """Delete hole or chamfer notes by index from list_notes (comma-separated), e.g. to
-    place one again with other text or position."""
+    """Delete notes by index from list_notes (comma-separated), e.g. to place one again
+    with other text or position."""
     return inv.delete_note(indices)
+
+
+@mcp.tool()
+def add_note(text: str, x: float, y: float, view: str = "",
+             leader_x: float | None = None, leader_y: float | None = None) -> str:
+    """Text note on the active sheet, for what a dimension cannot state (a blend radius
+    that is not a circle in any view, "ALL UNSPECIFIED RADII R2", a flat width).
+
+    Args:
+        text: note text; "\\n" starts a new line.
+        x, y: without view, sheet mm of the text's top-left corner; with view, model mm
+              from that view's centre.
+        view: view the point (and leader) refers to.
+        leader_x, leader_y: model mm in the view; a leader runs from the text to the
+              curve nearest this point.
+    """
+    return inv.add_note(text, x, y, view, leader_x, leader_y)
+
+
+@mcp.tool()
+def move_view_label(view: str, dx: float = 0, dy: float = 0) -> str:
+    """Shift a view's label (e.g. "A-A ( 1 : 1 )") by dx, dy sheet mm, e.g. off a
+    dimension it collides with."""
+    return inv.move_view_label(view, dx, dy)
+
+
+@mcp.tool()
+def add_sheet() -> str:
+    """Add an empty sheet with the active sheet's size, border and title block (entries
+    kept; the sheet number field counts by itself, e.g. 2/2) and make it active. Use when
+    one sheet cannot hold every view and dimension a part needs; place views of the same
+    model with add_base_view."""
+    return inv.add_sheet()
+
+
+@mcp.tool()
+def activate_sheet(sheet: str) -> str:
+    """Make a sheet active by number ("2") or name ("Sheet:2"). Views, dimensions, notes
+    and list_views work on the active sheet."""
+    return inv.activate_sheet(sheet)
 
 
 @mcp.tool()

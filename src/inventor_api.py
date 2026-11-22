@@ -1,5 +1,6 @@
 """Wrapper around Autodesk Inventor COM API."""
 
+import contextlib
 import json
 import os
 import re
@@ -155,10 +156,18 @@ class InventorConnection:
         """Documents.Add with dialogs suppressed.
         A template whose styles differ from the style library otherwise opens a
         modal "Style Conflict" dialog that blocks every COM call until clicked."""
+        with self._silent():
+            return self.app.Documents.Add(doc_type, template_file, True)
+
+    @contextlib.contextmanager
+    def _silent(self):
+        """Suppress Inventor's modal dialogs for the duration. A dialog raised during a
+        COM call blocks it until someone clicks; through MCP that is a timeout and a
+        dropped connection, with the save not done."""
         previous = self.app.SilentOperation
         self.app.SilentOperation = True
         try:
-            return self.app.Documents.Add(doc_type, template_file, True)
+            yield
         finally:
             self.app.SilentOperation = previous
 
@@ -214,20 +223,27 @@ class InventorConnection:
                     raise RuntimeError(
                         f"{path} is open in Inventor as '{other.DisplayName}'. Close it first "
                         "or save under another name.")
-            doc.SaveAs(path, False)
+            with self._silent():
+                doc.SaveAs(path, False)
             return f"Saved as: {path}" + self._save_dirty_references(doc) + self._write_constraint_log(doc)
-        doc.Save()
+        if not doc.FullFileName:
+            raise ValueError(f"{doc.DisplayName} has never been saved; give save_document a path")
+        with self._silent():
+            # Save2(True) saves the dirty documents it references too, without asking.
+            doc.Save2(True)
+        if doc.Dirty:
+            raise RuntimeError(f"Inventor did not save {doc.FullFileName}; it is still marked changed")
         return f"Saved: {doc.FullFileName}" + self._save_dirty_references(doc) + self._write_constraint_log(doc)
 
-    @staticmethod
-    def _save_dirty_references(doc) -> str:
+    def _save_dirty_references(self, doc) -> str:
         """Save models a drawing changed, e.g. iProperties written by set_title_block."""
         saved = []
         refs = doc.ReferencedDocuments
         for i in range(1, refs.Count + 1):
             ref = refs.Item(i)
             if ref.Dirty and ref.FullFileName:
-                ref.Save()
+                with self._silent():
+                    ref.Save()
                 saved.append(os.path.basename(ref.FullFileName))
         return f" (also saved {', '.join(saved)})" if saved else ""
 
@@ -252,7 +268,8 @@ class InventorConnection:
         translator.HasSaveCopyAsOptions(doc, context, options)  # fills in the defaults
         for key, value in (overrides or {}).items():
             self._put_indexed(options, "Value", key, value)
-        translator.SaveCopyAs(doc, context, options, data_medium)
+        with self._silent():
+            translator.SaveCopyAs(doc, context, options, data_medium)
         if not os.path.exists(path):
             raise RuntimeError(f"{format_upper} translator wrote no file at {path}")
 
@@ -1872,10 +1889,13 @@ class InventorConnection:
             except Exception:
                 pass
         for label, notes in (("chamfer note", sheet.DrawingNotes.ChamferNotes),
-                             ("bend note", sheet.DrawingNotes.BendNotes)):
+                             ("bend note", sheet.DrawingNotes.BendNotes),
+                             ("note", sheet.DrawingNotes.GeneralNotes),
+                             ("leader note", sheet.DrawingNotes.LeaderNotes)):
             for i in range(1, notes.Count + 1):
                 try:  # these notes' Text is a plain string; the box is the note's own
-                    boxes.append((f"{label} {notes.Item(i).Text}", self._rect(notes.Item(i))))
+                    first = (notes.Item(i).Text.splitlines() or [""])[0][:40]
+                    boxes.append((f"{label} {first}", self._rect(notes.Item(i))))
                 except Exception:
                     pass
         return boxes
@@ -2180,6 +2200,18 @@ class InventorConnection:
                     g = segments.Item(j).Geometry
                 except Exception:
                     continue
+                if curve.CurveType in (5126, 5127, 5128):  # ellipse, elliptical arc, B-spline
+                    # Edges on a doubly curved face come out as B-splines even where they
+                    # look straight; measuring to their chord picks the wrong curve.
+                    hit = self._closest_on_polyline(self._sample_curve(g), p)
+                    if hit is None:
+                        continue
+                    d, foot = hit
+                    if circular:
+                        continue
+                    if best_d is None or d < best_d:
+                        best, best_d, best_pt = curve, d, foot
+                    continue
                 try:
                     center, radius = g.Center, g.Radius
                     dx, dy = p.X - center.X, p.Y - center.Y
@@ -2205,6 +2237,86 @@ class InventorConnection:
             raise ValueError(f"No {'circular ' if circular else ''}curve in view {view.Name}")
         return best, best_d * 10 / view.Scale, self._tg().CreatePoint2d(*best_pt)
 
+    @staticmethod
+    def _sample_curve(geometry, count: int = 24):
+        """Points (sheet cm) along a 2D curve from its evaluator; [] when it has none."""
+        try:
+            ev = geometry.Evaluator
+            r = ev.GetParamExtents(0, 0)
+            a, b = r[-2], r[-1]
+            pts = []
+            for k in range(count + 1):
+                xy = ev.GetPointAtParam([a + (b - a) * k / count], [0, 0])[-1]
+                pts.append((xy[0], xy[1]))
+            return pts
+        except Exception:
+            return []
+
+    @staticmethod
+    def _closest_on_polyline(pts, p):
+        """(distance, foot) from sheet point p to the polyline pts, or None."""
+        best = None
+        for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+            vx, vy = bx - ax, by - ay
+            t = max(0.0, min(1.0, ((p.X - ax) * vx + (p.Y - ay) * vy) / ((vx * vx + vy * vy) or 1e-12)))
+            fx, fy = ax + t * vx, ay + t * vy
+            d = ((p.X - fx) ** 2 + (p.Y - fy) ** 2) ** 0.5
+            if best is None or d < best[0]:
+                best = (d, (fx, fy))
+        return best
+
+    def _straight(self, curve):
+        """(start, end) sheet points of a curve that is a straight line, else None. A
+        B-spline that does not leave its chord by more than 0.01 mm counts as a line."""
+        try:
+            if curve.CurveType == 5123:
+                s, e = curve.StartPoint, curve.EndPoint
+                return (s.X, s.Y), (e.X, e.Y)
+            if curve.CurveType != 5128 or curve.Segments.Count != 1:
+                return None
+            pts = self._sample_curve(curve.Segments.Item(1).Geometry, 12)
+        except Exception:
+            return None
+        if len(pts) < 2:
+            return None
+        (ax, ay), (bx, by) = pts[0], pts[-1]
+        n = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
+        if n < 1e-6:
+            return None
+        if max(abs((x - ax) * (by - ay) - (y - ay) * (bx - ax)) / n for x, y in pts) > 0.001:
+            return None
+        return (ax, ay), (bx, by)
+
+    def _nearest_straight_centerline(self, sheet, view, x: float, y: float):
+        """(centerline, distance in model mm, foot Point2d) of the straight centerline in
+        a view nearest a model-mm point, or None. A hole seen from the side has no curve
+        on its axis, only this line."""
+        p = self._view_point(view, x, y)
+        rect = self._view_rect(view)
+        best = None
+        lines = sheet.Centerlines
+        for i in range(1, lines.Count + 1):
+            line = lines.Item(i)
+            try:
+                if hasattr(line.Geometry, "Radius"):
+                    continue
+            except Exception:
+                pass
+            try:
+                a, b = line.StartPoint, line.EndPoint
+            except Exception:
+                continue
+            mid = ((a.X + b.X) * 5, (a.Y + b.Y) * 5)
+            if not (rect[0] <= mid[0] <= rect[2] and rect[1] <= mid[1] <= rect[3]):
+                continue
+            hit = self._closest_on_polyline([(a.X, a.Y), (b.X, b.Y)], p)
+            if hit and (best is None or hit[0] < best[1]):
+                best = (line, hit[0], hit[1])
+        if best is None:
+            return None
+        line, d, foot = best
+        return line, d * 10 / view.Scale, self._tg().CreatePoint2d(*foot)
+
     def add_dimension(self, view: str, kind: str, x1: float, y1: float,
                       x2: float | None = None, y2: float | None = None,
                       text_x: float = 0, text_y: float = 0, prefix: str = "",
@@ -2223,6 +2335,14 @@ class InventorConnection:
         kind = kind.lower()
         if kind in ("diameter", "radius"):
             curve, miss = self._nearest_curve(v, x1, y1, circular=True)
+            if miss > 1.5:
+                # Without this check the nearest arc anywhere was taken: an R5 window corner
+                # on a curved face (a B-spline in the view) came out as "R42,5".
+                raise ValueError(
+                    f"No circle or arc within 1.5 mm of ({x1}, {y1}) in {v.Name}; the nearest is "
+                    f"{miss:.1f} mm away. A corner lying on a curved face shows as a spline and takes "
+                    "no radius dimension: put the point on a real arc, or state the radius in a note "
+                    "(add_note).")
             intent = sheet.CreateGeometryIntent(curve)
             dim = dims.AddDiameter(text, intent) if kind == "diameter" else dims.AddRadius(text, intent)
         elif kind == "pcd":
@@ -2243,24 +2363,56 @@ class InventorConnection:
                 miss = max(m1, m2, mv)
             dim = dims.AddAngular(text, sheet.CreateGeometryIntent(c1, center),
                                   sheet.CreateGeometryIntent(cv, center), end)
+        elif kind == "line_angle":
+            if x2 is None or y2 is None:
+                raise ValueError("A line_angle dimension needs x2 and y2 (a point on each line)")
+            c1, m1 = self._nearest_curve(v, x1, y1)
+            c2, m2 = self._nearest_curve(v, x2, y2)
+            miss = max(m1, m2)
+            if self._same_curve(c1, c2):
+                raise ValueError(f"Both points picked the same curve in {v.Name}; put one on each line")
+            dim = dims.AddAngular(text, sheet.CreateGeometryIntent(c1), sheet.CreateGeometryIntent(c2))
         elif kind in ("horizontal", "vertical", "aligned"):
             if x2 is None or y2 is None:
                 raise ValueError(f"A {kind} dimension needs x2 and y2")
-            c1, m1 = self._nearest_curve_prefer_circle(v, x1, y1)
-            c2, m2 = self._nearest_curve_prefer_circle(v, x2, y2)
+            picks = [self._linear_pick(sheet, v, x, y) for x, y in ((x1, y1), (x2, y2))]
+            (c1, m1, f1, axis1), (c2, m2, f2, axis2) = picks
             miss = max(m1, m2)
             dim_type = {"aligned": 60161, "horizontal": 60162, "vertical": 60163}[kind]
 
             def intent(curve):
                 # Without the center intent a circle can be measured at a point of its
                 # rim, e.g. 50,04 instead of the 50 between two hole centers.
-                if curve.CurveType == 5124:  # kCircleCurve
+                if getattr(curve, "CurveType", None) == 5124:  # kCircleCurve; centerlines have none
                     return sheet.CreateGeometryIntent(curve, 57860)
                 return sheet.CreateGeometryIntent(curve)
-            dim = dims.AddLinear(text, intent(c1), intent(c2), dim_type)
+            if self._same_curve(c1, c2):
+                # Both points on one line: the length of that line (e.g. a top edge).
+                dim = dims.AddLinear(text, intent(c1), pythoncom.Missing, dim_type)
+            else:
+                dim = None
+                lines = (self._straight(c1), self._straight(c2))
+                if kind == "aligned" and all(lines) and self._parallel(*lines):
+                    # Two parallel edges (a wall): measure square to them. Inventor reads
+                    # B-spline edges as curves and measured 10,16 for a 5 mm wall.
+                    foot = self._project(f1, lines[1])
+                    try:
+                        dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1, f1),
+                                             sheet.CreateGeometryIntent(c2, foot), dim_type)
+                    except pythoncom.com_error:
+                        dim = None  # the square foot lies past the end of the second edge
+                if dim is None:
+                    try:
+                        dim = dims.AddLinear(text, intent(c1), intent(c2), dim_type)
+                    except pythoncom.com_error:
+                        # Two lines that do not overlap along the measured direction (a short
+                        # top edge against the full bottom edge) need a point on each.
+                        dim = dims.AddLinear(text, sheet.CreateGeometryIntent(c1, f1),
+                                             sheet.CreateGeometryIntent(c2, f2), dim_type)
         else:
-            raise ValueError("kind must be diameter, radius, pcd, angle, horizontal, vertical or aligned")
-        if kind != "angle":
+            raise ValueError("kind must be diameter, radius, pcd, angle, line_angle, horizontal, "
+                             "vertical or aligned")
+        if kind not in ("angle", "line_angle"):
             self._fit_precision(dim)
         if prefix or suffix:
             tail = suffix.replace("\n", "<Br/>")
@@ -2270,6 +2422,44 @@ class InventorConnection:
         picked = "curves" if kind in ("horizontal", "vertical", "aligned", "angle") else "curve"
         return (f"{kind.capitalize()} dimension {dim.Text.Text} in {v.Name} "
                 f"(picked {picked} within {miss:.1f} mm); text overlaps: {clashes or 'none'}")
+
+    def _linear_pick(self, sheet, view, x: float, y: float):
+        """(curve or centerline, distance mm, foot Point2d, is_axis) for one end of a linear
+        dimension. A straight centerline wins only when it is clearly closer than any
+        curve, e.g. the axis of a hole seen from the side."""
+        curve, miss = self._nearest_curve_prefer_circle(view, x, y)
+        foot = self._closest_on_curve(view, x, y)[2] if curve.CurveType != 5124 else None
+        axis = self._nearest_straight_centerline(sheet, view, x, y)
+        if axis is not None and axis[1] < miss - 0.05:
+            return axis[0], axis[1], axis[2], True
+        if foot is None:
+            c = curve.CenterPoint
+            foot = self._tg().CreatePoint2d(c.X, c.Y)
+        return curve, miss, foot, False
+
+    @staticmethod
+    def _same_curve(a, b) -> bool:
+        try:
+            pa = (a.StartPoint.X, a.StartPoint.Y, a.EndPoint.X, a.EndPoint.Y)
+            pb = (b.StartPoint.X, b.StartPoint.Y, b.EndPoint.X, b.EndPoint.Y)
+            return a.CurveType == b.CurveType and all(abs(u - w) < 1e-6 for u, w in zip(pa, pb))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _parallel(l1, l2, tol: float = 0.002) -> bool:
+        (ax, ay), (bx, by) = l1
+        (cx, cy), (dx, dy) = l2
+        ux, uy, vx, vy = bx - ax, by - ay, dx - cx, dy - cy
+        nu, nv = (ux * ux + uy * uy) ** 0.5, (vx * vx + vy * vy) ** 0.5
+        return nu > 0 and nv > 0 and abs(ux * vy - uy * vx) / (nu * nv) < tol
+
+    def _project(self, p, line):
+        """Foot of the perpendicular from Point2d p onto the infinite line through line."""
+        (ax, ay), (bx, by) = line
+        vx, vy = bx - ax, by - ay
+        t = ((p.X - ax) * vx + (p.Y - ay) * vy) / ((vx * vx + vy * vy) or 1e-12)
+        return self._tg().CreatePoint2d(ax + t * vx, ay + t * vy)
 
     def _nearest_curve_prefer_circle(self, view, x: float, y: float):
         """A point on a hole's rim can touch another curve too (a tangent edge, a line
@@ -2438,6 +2628,20 @@ class InventorConnection:
         else:
             attrs.Add("view", 14595, view_name)  # kStringType
 
+    @staticmethod
+    def _dimension_view(dimension):
+        """Name of the view whose geometry a dimension is attached to, for dimensions not
+        made by these tools (retrieved in Inventor, or added by hand). A drawing curve's
+        Parent is its view; a centerline's is the sheet, so both intents are tried."""
+        for name in ("IntentOne", "IntentTwo", "Intent"):
+            try:
+                parent = getattr(dimension, name).Geometry.Parent
+                if hasattr(parent, "Scale") and hasattr(parent, "DrawingCurves"):
+                    return parent.Name
+            except Exception:
+                continue
+        return None
+
     def _tagged_view(self, dimension):
         try:
             sets = dimension.AttributeSets
@@ -2468,9 +2672,9 @@ class InventorConnection:
         if not 1 <= index <= dims.Count:
             raise ValueError(f"Dimension index {index} out of range 1..{dims.Count}")
         dim = dims.Item(index)
-        view_name = self._tagged_view(dim)
+        view_name = self._tagged_view(dim) or self._dimension_view(dim)
         if view_name is None:
-            raise ValueError(f"Dimension {index} has no recorded view; it was not made by these tools")
+            raise ValueError(f"Dimension {index} is attached to no view geometry; move it in Inventor")
         dim.Text.Origin = self._view_point(self._view(view_name), text_x, text_y)
         clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"dimension {dim.Text.Text}" in c]
         return f"Dimension {index} ({dim.Text.Text}) text moved; text overlaps: {clashes or 'none'}"
@@ -2849,7 +3053,10 @@ class InventorConnection:
         problems += [f"{a} overlaps {b}" for a, b in self._clashes(boxes)]
         problems += [f"{name} sticks out of the border" for name, r in boxes
                      if r[0] < area[0] or r[1] < area[1] or r[2] > area[2] or r[3] > area[3]]
+        doc = sheet.Parent
         return {
+            "sheet": sheet.Name,
+            "sheets": [doc.Sheets.Item(i).Name for i in range(1, doc.Sheets.Count + 1)],
             "sheet_mm": [round(sheet.Width * 10, 1), round(sheet.Height * 10, 1)],
             "border_mm": [round(n, 1) for n in area],
             "title_block_mm": [round(n, 1) for n in self._rect(sheet.TitleBlock)] if sheet.TitleBlock else None,
@@ -3773,13 +3980,16 @@ class InventorConnection:
     def _notes(self, sheet):
         notes = []
         for kind, collection in (("hole", sheet.DrawingNotes.HoleThreadNotes),
-                                 ("chamfer", sheet.DrawingNotes.ChamferNotes)):
+                                 ("chamfer", sheet.DrawingNotes.ChamferNotes),
+                                 ("general", sheet.DrawingNotes.GeneralNotes),
+                                 ("leader", sheet.DrawingNotes.LeaderNotes)):
             for i in range(1, collection.Count + 1):
                 notes.append((kind, collection.Item(i)))
         return notes
 
     def list_notes(self) -> list[dict]:
-        """Hole and chamfer notes on the active sheet with an index for delete_note."""
+        """Hole, chamfer, general and leader notes on the active sheet with an index for
+        delete_note."""
         out = []
         for k, (kind, note) in enumerate(self._notes(self.active_drawing().ActiveSheet), 1):
             text = note.Text.Text if kind == "hole" else note.Text
@@ -3789,7 +3999,7 @@ class InventorConnection:
         return out
 
     def delete_note(self, indices: str) -> str:
-        """Delete hole or chamfer notes by index from list_notes, e.g. to place them again."""
+        """Delete notes by index from list_notes, e.g. to place them again."""
         notes = self._notes(self.active_drawing().ActiveSheet)
         picked = sorted({int(i) for i in indices.split(",") if i.strip()}, reverse=True)
         for i in picked:
@@ -3798,6 +4008,110 @@ class InventorConnection:
         for i in picked:
             notes[i - 1][1].Delete()
         return f"Deleted {len(picked)} note(s)"
+
+    def add_note(self, text: str, x: float, y: float, view: str = "",
+                 leader_x: float | None = None, leader_y: float | None = None) -> str:
+        """Text note on the active sheet. Without view, (x, y) is sheet mm and the top-left
+        corner of the text. With view, (x, y) is model mm from that view's center; with
+        leader_x, leader_y as well, a leader runs from the text to the curve nearest that
+        point (e.g. "R40,36" on a blend that takes no radius dimension). "\\n" starts a
+        new line."""
+        sheet = self.active_drawing().ActiveSheet
+        formatted = text.replace("\n", "<Br/>")
+        if (leader_x is None) != (leader_y is None):
+            raise ValueError("Give both leader_x and leader_y, or neither")
+        if leader_x is not None:
+            if not view:
+                raise ValueError("A leader note needs the view its arrow points into")
+            v = self._view(view)
+            curve, miss, foot = self._closest_on_curve(v, leader_x, leader_y)
+            points = self.app.TransientObjects.CreateObjectCollection()
+            # Text position first, the arrow's geometry last; the other order is E_INVALIDARG.
+            points.Add(self._view_point(v, x, y))
+            points.Add(sheet.CreateGeometryIntent(curve, foot))
+            note = sheet.DrawingNotes.LeaderNotes.Add(points, formatted)
+            where = f"leader note in {v.Name} (arrow on a curve within {miss:.1f} mm)"
+        else:
+            point = self._view_point(self._view(view), x, y) if view else self._sheet_point(x, y)
+            note = sheet.DrawingNotes.GeneralNotes.AddFitted(point, formatted)
+            where = "note"
+        # note.Text drops the line breaks, so the checker's label is its first 40 characters.
+        tag = (note.Text.splitlines() or [""])[0][:40]
+        clashes = [c for c in self._clashes(self._text_boxes(sheet)) if any(tag in n for n in c)]
+        r = self._rect(note)
+        return (f"Added {where} '{text.splitlines()[0] if text else ''}' at {self._fmt_rect(r)}; "
+                f"text overlaps: {clashes or 'none'}")
+
+    def move_view_label(self, view: str, dx: float = 0, dy: float = 0) -> str:
+        """Shift a view's label (e.g. "A-A ( 1 : 1 )") by dx, dy sheet mm, e.g. up off a
+        dimension under it."""
+        sheet = self.active_drawing().ActiveSheet
+        v = self._view(view)
+        if not v.ShowLabel:
+            raise ValueError(f"View {v.Name} shows no label")
+        p = v.Label.Position
+        v.Label.Position = self._tg().CreatePoint2d(p.X + dx / 10.0, p.Y + dy / 10.0)
+        clashes = [c for c in self._clashes(self._text_boxes(sheet)) if f"label of {v.Name}" in c]
+        return f"Label of {v.Name} at {self._fmt_rect(self._rect(v.Label))}; text overlaps: {clashes or 'none'}"
+
+    # Annotation collections a copied sheet brings along; add_sheet empties them.
+    _SHEET_CONTENT = ("PartsLists", "Balloons", "FeatureControlFrames", "SurfaceTextureSymbols",
+                      "SketchedSymbols", "WeldingSymbols", "Centerlines", "Centermarks", "Sketches")
+
+    def add_sheet(self) -> str:
+        """New empty sheet after the others with the active sheet's size, border, title
+        block and title block entries, then make it active. The title block's sheet field
+        counts by itself (2/2). Sheets.Add plus AddTitleBlock/AddBorder refuse the team's
+        definitions (E_INVALIDARG), so the active sheet is copied and emptied."""
+        doc = self.active_drawing()
+        source = doc.ActiveSheet
+        new = source.CopyTo(doc)
+        views = new.DrawingViews
+        for i in range(views.Count, 0, -1):
+            try:
+                views.Item(i).Delete()  # dimensions and notes on the view go with it
+            except Exception:
+                pass
+        notes = new.DrawingNotes
+        for name in ("GeneralNotes", "LeaderNotes", "HoleThreadNotes", "ChamferNotes"):
+            collection = getattr(notes, name)
+            for i in range(collection.Count, 0, -1):
+                collection.Item(i).Delete()
+        dims = new.DrawingDimensions.GeneralDimensions
+        for i in range(dims.Count, 0, -1):
+            dims.Item(i).Delete()
+        # GD&T frames, datums and other symbols outlive their views as orphans.
+        for name in self._SHEET_CONTENT:
+            try:
+                collection = getattr(new, name)
+            except Exception:
+                continue
+            for i in range(collection.Count, 0, -1):
+                try:
+                    collection.Item(i).Delete()
+                except Exception:
+                    pass
+        new.Name = "Sheet"  # Inventor appends ":<number>"
+        new.Activate()
+        index = next(i for i in range(1, doc.Sheets.Count + 1) if doc.Sheets.Item(i).Name == new.Name)
+        return (f"Added {new.Name} ({index}/{doc.Sheets.Count}), {new.Width * 10:.0f} x "
+                f"{new.Height * 10:.0f} mm with the title block of {source.Name}; it is now active")
+
+    def activate_sheet(self, sheet: str) -> str:
+        """Make a sheet active by number ("2") or name ("Sheet:2"). The drawing tools work
+        on the active sheet."""
+        doc = self.active_drawing()
+        sheets = [doc.Sheets.Item(i) for i in range(1, doc.Sheets.Count + 1)]
+        key = sheet.strip()
+        target = None
+        if key.isdigit() and 1 <= int(key) <= len(sheets):
+            target = sheets[int(key) - 1]
+        else:
+            target = next((s for s in sheets if s.Name.lower() == key.lower()), None)
+        if target is None:
+            raise ValueError(f"No sheet {sheet!r}; sheets: {[s.Name for s in sheets]}")
+        target.Activate()
+        return f"{target.Name} is active ({sheets.index(target) + 1}/{len(sheets)})"
 
     # Names people use for iProperties, mapped to (property set, property name).
     _PROPERTIES = {

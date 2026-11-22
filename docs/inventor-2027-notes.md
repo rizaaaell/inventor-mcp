@@ -486,6 +486,29 @@ fully dimensioned sheets, all through `execute_python`. None of it is a tool yet
   been written; the save had not (drawing still `Dirty`). `doc.Save2(True)` with
   `app.SilentOperation = True` saved it at once.
 
+### What the tools do now (same day)
+
+- `save_document`, `export_pdf` and other translator exports run inside
+  `SilentOperation = True` (restored afterwards); a plain save uses `Save2(True)` and
+  reports a document that stays `Dirty`.
+- `add_dimension` picks along splines by sampling `Evaluator.GetPointAtParam` (spline
+  segments have no `GetClosestPoint`). `radius`/`diameter` refuse a point more than
+  1,5 mm from a real arc. Both points on one line give that line's length
+  (`AddLinear(text, intent)` with one intent). `aligned` between two parallel straight
+  curves measures from a point on the first to its perpendicular foot on the second, so
+  a near-straight spline wall reads 5, not 10,16. A straight sheet centerline nearer
+  than every curve is picked as an axis. New kind `line_angle` uses
+  `AddAngular(text, line1, line2)`.
+- `move_dimension` finds the view of a dimension it did not make from the intent's
+  `Geometry.Parent` (a drawing curve's parent is its view).
+- New tools: `add_note` (general note via `GeneralNotes.AddFitted`, "\n" becomes
+  `<Br/>`; leader note with text point first), `move_view_label`, `add_sheet`
+  (`Sheet.CopyTo` the active sheet, then delete views, notes, dimensions, FCFs, symbols,
+  centerlines and sketches; name "Sheet" becomes "Sheet:n"), `activate_sheet`.
+  `list_views` reports the active sheet and all sheet names. `list_notes` and the
+  overlap checker include general and leader notes. `note.Text` of a multi-line note
+  comes back without the line breaks.
+
 ## Closing documents
 
 - `Document.Close` on a part an open assembly or drawing still uses shows an
